@@ -58,7 +58,11 @@ type Options struct {
 // Configurations are YAML or JSON. Responses of validate and generate are
 // plain text, unless the request accepts application/json: then generate
 // answers {"config": "..."}, and errors are reported as
-// {"message": "...", "fields": [{"field": "servers[0].default.port", "message": "..."}]}.
+//
+//	{"message": "...", "fields": [{"field": "servers[0].default.port", "message": "...", "code": "invalid_port", "value": "70000"}]}
+//
+// where code is a config.ProblemCode, or "cert_not_found", and identifies
+// the problem for clients that describe it in their own words.
 //
 // Sites are exchanged as {"revision": 1, "sites": [{"id": "...", "config": {...}}]},
 // where each config is one entry of servers. A PUT must carry the revision
@@ -267,7 +271,12 @@ type errorResponse struct {
 type fieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
+	Code    string `json:"code,omitempty"`
+	Value   string `json:"value,omitempty"`
 }
+
+// certNotFound is the problem code of missing certificates.
+const certNotFound = "cert_not_found"
 
 func writeError(w http.ResponseWriter, r *http.Request, status int, err error) {
 	if !wantsJSON(r) {
@@ -284,7 +293,15 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, err error) {
 		list = config.FieldErrors{single}
 	}
 	for _, fe := range list {
-		resp.Fields = append(resp.Fields, fieldError{fe.Field, fe.Err.Error()})
+		f := fieldError{Field: fe.Field, Message: fe.Err.Error()}
+		var problem *config.Problem
+		switch {
+		case errors.As(fe.Err, &problem):
+			f.Code, f.Value = string(problem.Code), problem.Value
+		case errors.Is(fe.Err, nginx.ErrCertNotFound):
+			f.Code = certNotFound
+		}
+		resp.Fields = append(resp.Fields, f)
 	}
 	writeJSON(w, status, resp)
 }

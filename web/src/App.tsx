@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 
 import { ImportDialog } from "@/components/import-dialog"
+import { LanguageMenu } from "@/components/language-menu"
 import { PreviewStep } from "@/components/preview-step"
 import { RoutesStep } from "@/components/routes-step"
 import { SitesStep } from "@/components/sites-step"
@@ -45,6 +46,7 @@ import {
   useValidation,
   type SiteStore,
 } from "@/lib/hooks"
+import { useI18n } from "@/lib/i18n"
 import {
   domainsOf,
   locate,
@@ -53,13 +55,11 @@ import {
   type StepId,
 } from "@/lib/model"
 
-const steps: StepInfo[] = [
-  { id: "sites", title: "Sites", description: "Domains and HTTPS" },
-  { id: "routes", title: "Routes", description: "Paths and upstreams" },
-  { id: "preview", title: "Preview", description: "proxy.conf" },
-]
+const stepIds: StepId[] = ["sites", "routes", "preview"]
 
 export function App() {
+  const { t } = useI18n()
+  const steps: StepInfo[] = stepIds.map((id) => ({ id, ...t.steps[id] }))
   const store = useSiteStore()
   const sites = store.sites ?? []
   const setSites = store.setSites
@@ -121,11 +121,9 @@ export function App() {
           </div>
           <div className="mr-auto">
             <h1 className="font-heading text-base leading-tight font-semibold">
-              Simple Proxy
+              {t.app.name}
             </h1>
-            <p className="text-xs text-muted-foreground">
-              nginx reverse proxy builder
-            </p>
+            <p className="text-xs text-muted-foreground">{t.app.subtitle}</p>
           </div>
           <SaveStatus store={store} />
           <Button
@@ -135,8 +133,9 @@ export function App() {
             onClick={() => setImportOpen(true)}
           >
             <FileUp />
-            Import
+            {t.app.import}
           </Button>
+          <LanguageMenu />
           <ThemeToggle />
         </div>
         <div className="mx-auto max-w-5xl px-4 py-3 sm:px-6">
@@ -153,16 +152,12 @@ export function App() {
         <div className="mx-auto w-full max-w-5xl px-4 pt-6 sm:px-6">
           <Alert variant="destructive">
             <CircleAlert />
-            <AlertTitle>The sites were changed elsewhere</AlertTitle>
-            <AlertDescription>
-              Another window saved changes after this page loaded, so changes
-              made here can no longer be saved. Reload to continue with the
-              latest sites.
-            </AlertDescription>
+            <AlertTitle>{t.storage.conflictTitle}</AlertTitle>
+            <AlertDescription>{t.storage.conflictText}</AlertDescription>
             <AlertAction>
               <Button size="sm" variant="outline" onClick={store.reload}>
                 <RotateCw />
-                Reload
+                {t.storage.reload}
               </Button>
             </AlertAction>
           </Alert>
@@ -205,11 +200,11 @@ export function App() {
             onClick={() => show(steps[index - 1].id)}
           >
             <ArrowLeft />
-            Back
+            {t.app.back}
           </Button>
           <p className="mx-auto truncate text-xs text-muted-foreground">
             {enabled.length === 0
-              ? "No sites yet"
+              ? t.app.noSites
               : enabled.flatMap(domainsOf).slice(0, 3).join(", ") +
                 (enabled.flatMap(domainsOf).length > 3 ? ", …" : "")}
           </p>
@@ -232,6 +227,7 @@ export function App() {
 }
 
 function SaveStatus({ store }: { store: SiteStore }) {
+  const { t } = useI18n()
   const status = "flex items-center gap-1.5 text-xs text-muted-foreground"
   if (store.sites === null) return null
   switch (store.save) {
@@ -239,7 +235,7 @@ function SaveStatus({ store }: { store: SiteStore }) {
       return (
         <span className={status}>
           <CloudCheck className="size-4" />
-          <span className="max-sm:sr-only">Saved</span>
+          <span className="max-sm:sr-only">{t.storage.saved}</span>
         </span>
       )
     case "pending":
@@ -247,7 +243,7 @@ function SaveStatus({ store }: { store: SiteStore }) {
       return (
         <span className={status}>
           <Spinner />
-          <span className="max-sm:sr-only">Saving…</span>
+          <span className="max-sm:sr-only">{t.storage.saving}</span>
         </span>
       )
     case "failed":
@@ -261,7 +257,7 @@ function SaveStatus({ store }: { store: SiteStore }) {
               onClick={store.retrySave}
             >
               <CloudAlert />
-              Not saved · Retry
+              {t.storage.notSaved}
             </Button>
           </TooltipTrigger>
           <TooltipContent>{store.saveError}</TooltipContent>
@@ -279,11 +275,12 @@ function Loading({
   error: string | null
   onRetry: () => void
 }) {
+  const { t } = useI18n()
   if (error === null) {
     return (
       <div className="flex items-center justify-center gap-2 py-24 text-muted-foreground">
         <Spinner />
-        Loading sites…
+        {t.storage.loading}
       </div>
     )
   }
@@ -293,13 +290,13 @@ function Loading({
         <EmptyMedia variant="icon">
           <DatabaseZap />
         </EmptyMedia>
-        <EmptyTitle>The sites could not be loaded</EmptyTitle>
+        <EmptyTitle>{t.storage.loadFailed}</EmptyTitle>
         <EmptyDescription>{error}</EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
         <Button variant="outline" onClick={onRetry}>
           <RotateCw />
-          Try again
+          {t.storage.tryAgain}
         </Button>
       </EmptyContent>
     </Empty>

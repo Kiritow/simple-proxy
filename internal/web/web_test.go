@@ -92,13 +92,13 @@ func TestHandler(t *testing.T) {
 		{"invalid text", request{"POST", "/api/generate", badConfig, false}, http.StatusBadRequest, "text/plain", "servers[0].server_name: invalid name"},
 		{
 			"invalid json", request{"POST", "/api/generate", badConfig, true}, http.StatusBadRequest, "application/json",
-			`"fields":[{"field":"servers[0].server_name","message":"invalid name \"a;b\""},{"field":"servers[0].default.port","message":"70000 is not a valid port"}]`,
+			`"fields":[{"field":"servers[0].server_name","message":"invalid name \"a;b\"","code":"invalid_name","value":"a;b"},{"field":"servers[0].default.port","message":"70000 is not a valid port","code":"invalid_port","value":"70000"}]`,
 		},
 		{"syntax error json", request{"POST", "/api/generate", "servers: [", true}, http.StatusBadRequest, "application/json", `{"message":"yaml: `},
 		{"missing certificate text", request{"POST", "/api/generate", httpsConfig, false}, http.StatusUnprocessableEntity, "text/plain", "certificate not found"},
 		{
 			"missing certificate json", request{"POST", "/api/generate", httpsConfig, true}, http.StatusUnprocessableEntity, "application/json",
-			`"fields":[{"field":"servers[0].cert_name","message":"certificate not found: example.com"}]`,
+			`"fields":[{"field":"servers[0].cert_name","message":"certificate not found: example.com","code":"cert_not_found"}]`,
 		},
 		{"too large", request{"POST", "/api/generate", strings.Repeat("#", web.MaxConfigSize+1), false}, http.StatusRequestEntityTooLarge, "text/plain", "too large"},
 

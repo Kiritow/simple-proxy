@@ -10,6 +10,10 @@ generated `proxy.conf`. Problems are pointed out next to the inputs as you
 type. Existing `config.yaml` files can be imported, and the configuration can
 be exported as YAML again.
 
+The UI is available in English and Chinese. It follows the browser's
+preferred languages and falls back to English; the language can also be
+chosen in the header.
+
 Sites are saved as you edit them in an SQLite database, `sites.db`, in the
 directory of the executable. If two windows edit the sites at once, the one
 that saves second is asked to reload instead of overwriting the other.
@@ -101,7 +105,9 @@ Errors return `400` for invalid configuration, `422` for missing certificates
 and `500` (`503` for `/api/certificates`) if acme.sh fails. Responses are plain
 text, unless the request has `Accept: application/json`: then `generate`
 returns `{"config": "..."}`, and errors list the invalid fields as in
-`{"message": "...", "fields": [{"field": "servers[0].default.port", "message": "is required ..."}]}`.
+`{"message": "...", "fields": [{"field": "servers[0].default.port", "message": "70000 is not a valid port", "code": "invalid_port", "value": "70000"}]}`.
+The `code` (see `config.ProblemCode`, plus `cert_not_found`) lets clients
+describe a problem in their own words, as the UI does in Chinese.
 
 ```bash
 curl --data-binary @config.yaml http://127.0.0.1:8080/api/generate > proxy.conf
@@ -118,6 +124,7 @@ internal/store     SQLite storage of the sites (modernc.org/sqlite, no cgo)
 internal/web       HTTP handlers, embeds the UI from internal/web/dist
 web/               UI: React, Tailwind CSS and shadcn/ui
 web/src/lib/model.ts  the UI's model and its conversion to and from YAML
+web/src/lib/i18n/  the UI's messages in English (en.ts) and Chinese (zh.ts)
 ```
 
 The built UI in `internal/web/dist` is committed, so building the server only

@@ -37,6 +37,7 @@ import {
 import { FieldGroup } from "@/components/ui/field"
 import { Switch } from "@/components/ui/switch"
 import type { Problems } from "@/lib/hooks"
+import { useI18n } from "@/lib/i18n"
 import {
   DEFAULT_HOST,
   domainsOf,
@@ -64,6 +65,7 @@ export function RoutesStep({
   focus: (key: string) => void
   onBack: () => void
 }) {
+  const { t } = useI18n()
   if (sites.length === 0) {
     return (
       <Empty className="border border-dashed">
@@ -71,15 +73,13 @@ export function RoutesStep({
           <EmptyMedia variant="icon">
             <Signpost />
           </EmptyMedia>
-          <EmptyTitle>No sites to route</EmptyTitle>
-          <EmptyDescription>
-            Routes belong to a site. Add a site first.
-          </EmptyDescription>
+          <EmptyTitle>{t.routes.noSitesTitle}</EmptyTitle>
+          <EmptyDescription>{t.routes.noSitesText}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
           <Button variant="outline" onClick={onBack}>
             <ArrowLeft />
-            Back to sites
+            {t.routes.backToSites}
           </Button>
         </EmptyContent>
       </Empty>
@@ -106,9 +106,9 @@ export function RoutesStep({
 
   return (
     <div className="grid gap-6 md:grid-cols-[13rem_minmax(0,1fr)]">
-      <nav aria-label="Sites" className="flex flex-col gap-1">
+      <nav aria-label={t.routes.sitesNav} className="flex flex-col gap-1">
         <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">
-          Sites
+          {t.routes.sitesNav}
         </p>
         {sites.map((s) => {
           const prefix = `${siteKey(s)}/r:`
@@ -127,7 +127,9 @@ export function RoutesStep({
                 !s.enabled && "text-muted-foreground"
               )}
             >
-              <span className="truncate">{domainsOf(s)[0] || "New site"}</span>
+              <span className="truncate">
+                {domainsOf(s)[0] || t.sites.newSite}
+              </span>
               {count > 0 && (
                 <span className="size-1.5 shrink-0 rounded-full bg-destructive" />
               )}
@@ -141,12 +143,12 @@ export function RoutesStep({
 
       <div className="flex min-w-0 flex-col gap-4">
         <StepHeader
-          title={domainsOf(site).join(" ") || "New site"}
-          description="Each request goes to the route with the longest matching path prefix."
+          title={domainsOf(site).join(" ") || t.sites.newSite}
+          description={t.routes.description}
           actions={
             <Button onClick={addRoute}>
               <Plus />
-              Add route
+              {t.routes.add}
             </Button>
           }
         />
@@ -173,8 +175,7 @@ export function RoutesStep({
         ))}
         {site.routes.length === 0 && (
           <p className="text-center text-sm text-muted-foreground">
-            Add a route to send a path such as <code>/api</code> to another
-            service.
+            {t.routes.emptyHint}
           </p>
         )}
       </div>
@@ -195,6 +196,7 @@ function RouteCard({
   onChange: (patch: Partial<Route>) => void
   onRemove?: () => void // undefined for the default route
 }) {
+  const { t } = useI18n()
   const isDefault = route === site.root
   const key = routeKey(site, route)
   const error = (field: string) => problems.byKey.get(`${key}.${field}`)
@@ -215,29 +217,31 @@ function RouteCard({
             <Signpost className="size-4 text-muted-foreground" />
           )}
           <span className="font-mono">
-            {route.path || (isDefault ? "/" : "New route")}
+            {route.path || (isDefault ? "/" : t.routes.newRoute)}
           </span>
           <ArrowRight className="size-3.5 text-muted-foreground" />
           <span className="font-mono text-muted-foreground">
             http://{host.includes(":") ? `[${host}]` : host}:{port || "?"}
           </span>
-          {isDefault && <Badge variant="secondary">default</Badge>}
-          {!route.enabled && <Badge variant="outline">disabled</Badge>}
+          {isDefault && (
+            <Badge variant="secondary">{t.routes.defaultBadge}</Badge>
+          )}
+          {!route.enabled && (
+            <Badge variant="outline">{t.routes.disabledBadge}</Badge>
+          )}
         </CardTitle>
         <CardDescription>
-          {isDefault
-            ? "Serves requests that no other route matches. Other routes inherit its upstream."
-            : "Empty upstream fields inherit those of the default route."}
+          {isDefault ? t.routes.defaultText : t.routes.routeText}
         </CardDescription>
         <CardAction className="flex items-center gap-1">
           <Switch
             checked={route.enabled}
             onCheckedChange={(enabled) => onChange({ enabled })}
-            aria-label="Generate this route"
+            aria-label={t.routes.enabled}
             className="mr-2"
           />
           {onRemove && (
-            <IconButton label="Remove route" onClick={onRemove}>
+            <IconButton label={t.routes.remove} onClick={onRemove}>
               <Trash2 />
             </IconButton>
           )}
@@ -248,7 +252,7 @@ function RouteCard({
           <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_8rem]">
             <TextField
               id={`${key}.path`}
-              label="Path prefix"
+              label={t.routes.path}
               placeholder={isDefault ? "/" : "/api"}
               className="[&_input]:font-mono"
               value={route.path}
@@ -257,7 +261,7 @@ function RouteCard({
             />
             <TextField
               id={`${key}.ip`}
-              label="Upstream host"
+              label={t.routes.host}
               placeholder={inheritedHost}
               value={route.host}
               onChange={(e) => onChange({ host: e.target.value })}
@@ -265,7 +269,7 @@ function RouteCard({
             />
             <TextField
               id={`${key}.port`}
-              label="Port"
+              label={t.routes.port}
               type="number"
               min={1}
               max={65535}
@@ -278,22 +282,22 @@ function RouteCard({
           <div className="grid gap-3 lg:grid-cols-3">
             <ToggleCard
               id={`${key}.websocket`}
-              title="WebSocket"
-              description="Pass connection upgrades through."
+              title={t.routes.websocket}
+              description={t.routes.websocketText}
               checked={route.websocket}
               onCheckedChange={(websocket) => onChange({ websocket })}
             />
             <ToggleCard
               id={`${key}.realtime`}
-              title="Realtime"
-              description="No buffering, for streams and server-sent events."
+              title={t.routes.realtime}
+              description={t.routes.realtimeText}
               checked={route.realtime}
               onCheckedChange={(realtime) => onChange({ realtime })}
             />
             <ToggleCard
               id={`${key}.disable_cache`}
-              title="No cache"
-              description="Stop nginx and browsers from caching responses."
+              title={t.routes.noCache}
+              description={t.routes.noCacheText}
               checked={route.disableCache}
               onCheckedChange={(disableCache) => onChange({ disableCache })}
             />

@@ -32,8 +32,20 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import type { FieldProblem } from "@/lib/api"
 import type { Problems } from "@/lib/hooks"
+import { describeProblem, useI18n } from "@/lib/i18n"
 import { directiveKey, newId, type Directive } from "@/lib/model"
+
+// useDescribe returns the message for a problem reported by the server, or
+// passes a message through.
+function useDescribe() {
+  const { t } = useI18n()
+  return (error?: FieldProblem | string) =>
+    typeof error === "string" || error === undefined
+      ? error
+      : describeProblem(t, error)
+}
 
 export function StepHeader({
   title,
@@ -68,20 +80,21 @@ export function TextField({
   id: string
   label: ReactNode
   description?: ReactNode
-  error?: string
+  error?: FieldProblem | string
 } & ComponentProps<typeof Input>) {
+  const message = useDescribe()(error)
   return (
-    <Field data-invalid={error ? true : undefined} className={className}>
+    <Field data-invalid={message ? true : undefined} className={className}>
       <FieldLabel htmlFor={id}>{label}</FieldLabel>
       <Input
         id={id}
-        aria-invalid={error ? true : undefined}
+        aria-invalid={message ? true : undefined}
         autoComplete="off"
         spellCheck={false}
         {...props}
       />
-      {error ? (
-        <FieldError>{error}</FieldError>
+      {message ? (
+        <FieldError>{message}</FieldError>
       ) : (
         description && <FieldDescription>{description}</FieldDescription>
       )}
@@ -130,6 +143,8 @@ export function DirectiveList({
   problems: Problems
   placeholder: string
 }) {
+  const { t } = useI18n()
+  const describe = useDescribe()
   const [added, setAdded] = useState("")
   const add = () => {
     const d = { id: newId(), text: "" }
@@ -140,14 +155,12 @@ export function DirectiveList({
   return (
     <FieldSet className="gap-3">
       <FieldLegend variant="label" className="mb-0">
-        Extra directives
+        {t.directives.title}
       </FieldLegend>
-      <FieldDescription>
-        Raw nginx directives for this block, one per row.
-      </FieldDescription>
+      <FieldDescription>{t.directives.text}</FieldDescription>
       {items.map((d) => {
         const key = directiveKey(owner, d)
-        const error = problems.byKey.get(key)
+        const error = describe(problems.byKey.get(key))
         return (
           <Field key={d.id} data-invalid={error ? true : undefined}>
             <div className="flex gap-2">
@@ -162,7 +175,7 @@ export function DirectiveList({
                   )
                 }
                 placeholder={placeholder}
-                aria-label="Directive"
+                aria-label={t.directives.label}
                 aria-invalid={error ? true : undefined}
                 autoFocus={d.id === added}
                 autoComplete="off"
@@ -170,7 +183,7 @@ export function DirectiveList({
                 className="font-mono"
               />
               <IconButton
-                label="Remove directive"
+                label={t.directives.remove}
                 onClick={() => onChange(items.filter((it) => it.id !== d.id))}
               >
                 <X />
@@ -182,7 +195,7 @@ export function DirectiveList({
       })}
       <Button variant="outline" size="sm" className="w-fit" onClick={add}>
         <Plus />
-        Add directive
+        {t.directives.add}
       </Button>
     </FieldSet>
   )
@@ -216,6 +229,7 @@ export function ConfirmButton({
   onConfirm: () => void
   children: ReactNode // the trigger
 }) {
+  const { t } = useI18n()
   return (
     <AlertDialog>
       <AlertDialogTrigger asChild>{children}</AlertDialogTrigger>
@@ -225,7 +239,7 @@ export function ConfirmButton({
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel>{t.confirm.cancel}</AlertDialogCancel>
           <AlertDialogAction variant="destructive" onClick={onConfirm}>
             {action}
           </AlertDialogAction>

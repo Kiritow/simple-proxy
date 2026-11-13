@@ -2,7 +2,12 @@
 
 import type { ConfigJSON, StoredSite } from "@/lib/model"
 
-export type FieldProblem = { field: string; message: string }
+export type FieldProblem = {
+  field: string
+  message: string // in English
+  code?: string // identifies the problem, see describeProblem
+  value?: string
+}
 
 export type ApiError = {
   status: number // 0 if the server could not be reached
@@ -56,7 +61,7 @@ export async function generateConfig(
       ok: false,
       error: {
         status: 0,
-        message: `Cannot reach the server: ${err}`,
+        message: String(err),
         fields: [],
       },
     }

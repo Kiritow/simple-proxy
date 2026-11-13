@@ -14,7 +14,13 @@ import {
 } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { fetchExample } from "@/lib/api"
-import { ImportError, parseYaml, type Site } from "@/lib/model"
+import { useI18n } from "@/lib/i18n"
+import {
+  ImportError,
+  parseYaml,
+  type ImportProblem,
+  type Site,
+} from "@/lib/model"
 
 export function ImportDialog({
   open,
@@ -25,14 +31,17 @@ export function ImportDialog({
   onOpenChange: (open: boolean) => void
   onImport: (sites: Site[]) => void
 }) {
+  const { t } = useI18n()
   const [text, setText] = useState("")
-  const [problems, setProblems] = useState<string[]>([])
+  // Problems are kept untranslated, so that they follow language changes;
+  // strings are errors that come without a code, such as network failures.
+  const [problems, setProblems] = useState<(ImportProblem | string)[]>([])
   const fileInput = useRef<HTMLInputElement>(null)
 
   const load = (promise: Promise<string>) =>
     promise.then(
-      (t) => {
-        setText(t)
+      (loaded) => {
+        setText(loaded)
         setProblems([])
       },
       (err: unknown) => setProblems([String(err)])
@@ -54,11 +63,8 @@ export function ImportDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Import configuration</DialogTitle>
-          <DialogDescription>
-            Paste a config.yaml (or JSON), e.g. one used with
-            legacy-proxy-generator. Importing replaces the current sites.
-          </DialogDescription>
+          <DialogTitle>{t.import.title}</DialogTitle>
+          <DialogDescription>{t.import.description}</DialogDescription>
         </DialogHeader>
         <Textarea
           value={text}
@@ -68,19 +74,21 @@ export function ImportDialog({
           }
           spellCheck={false}
           wrap="off"
-          aria-label="Configuration"
+          aria-label={t.import.label}
           aria-invalid={problems.length > 0 ? true : undefined}
           className="field-sizing-fixed h-72 resize-none font-mono text-xs md:text-xs"
         />
         {problems.length > 0 && (
           <Alert variant="destructive">
             <CircleAlert />
-            <AlertTitle>The configuration cannot be imported</AlertTitle>
+            <AlertTitle>{t.import.failed}</AlertTitle>
             <AlertDescription>
               <ul className="list-disc pl-4">
                 {problems.map((p, i) => (
                   <li key={i} className="whitespace-pre-wrap">
-                    {p}
+                    {typeof p === "string"
+                      ? p
+                      : t.import.problems[p.code](p.path, p.detail ?? "")}
                   </li>
                 ))}
               </ul>
@@ -94,18 +102,18 @@ export function ImportDialog({
               onClick={() => fileInput.current?.click()}
             >
               <FileUp />
-              Open file
+              {t.import.openFile}
             </Button>
             <Button variant="ghost" onClick={() => load(fetchExample())}>
-              Load example
+              {t.import.loadExample}
             </Button>
           </div>
           <div className="flex gap-2">
             <DialogClose asChild>
-              <Button variant="outline">Cancel</Button>
+              <Button variant="outline">{t.import.cancel}</Button>
             </DialogClose>
             <Button onClick={submit} disabled={!text.trim()}>
-              Import
+              {t.import.import}
             </Button>
           </div>
         </DialogFooter>

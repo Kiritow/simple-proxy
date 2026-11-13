@@ -220,10 +220,22 @@ export function toYaml(sites: Site[]): string {
   return stringify(serialize(sites).config, { lineWidth: 0 })
 }
 
+export type ImportProblem = {
+  code:
+    | "empty"
+    | "syntax"
+    | "unknown_field"
+    | "expected_mapping"
+    | "expected_list"
+    | "expected_directive"
+  path: string // such as "servers[0].default"; empty for the whole document
+  detail?: string // the parser's message, for syntax errors
+}
+
 export class ImportError extends Error {
-  readonly problems: string[]
-  constructor(problems: string[]) {
-    super(problems.join("\n"))
+  readonly problems: ImportProblem[]
+  constructor(problems: ImportProblem[]) {
+    super(problems.map((p) => `${p.path}: ${p.detail ?? p.code}`).join("\n"))
     this.problems = problems
   }
 }
@@ -257,9 +269,10 @@ export function parseYaml(text: string): Site[] {
   try {
     doc = parse(text)
   } catch (err) {
-    throw new ImportError([err instanceof Error ? err.message : String(err)])
+    const detail = err instanceof Error ? err.message : String(err)
+    throw new ImportError([{ code: "syntax", path: "", detail }])
   }
-  if (doc == null) throw new ImportError(["the configuration is empty"])
+  if (doc == null) throw new ImportError([{ code: "empty", path: "" }])
   return sitesFromConfig(doc)
 }
 
@@ -280,22 +293,24 @@ export function fromStored(stored: StoredSite[]): Site[] {
 // server, it rejects unknown fields; other problems are left for the server
 // to report once the sites are in the builder.
 function sitesFromConfig(doc: unknown): Site[] {
-  const problems: string[] = []
+  const problems: ImportProblem[] = []
   const mapping = (v: unknown, at: string, fields: Set<string>) => {
     if (v == null) return {}
     if (typeof v !== "object" || Array.isArray(v)) {
-      problems.push(`${at}: expected a mapping`)
+      problems.push({ code: "expected_mapping", path: at })
       return {}
     }
     for (const key of Object.keys(v)) {
-      if (!fields.has(key)) problems.push(`${at}.${key}: unknown field`)
+      if (!fields.has(key)) {
+        problems.push({ code: "unknown_field", path: `${at}.${key}` })
+      }
     }
     return v as Record<string, unknown>
   }
   const list = (v: unknown, at: string): unknown[] => {
     if (v == null) return []
     if (Array.isArray(v)) return v
-    problems.push(`${at}: expected a list`)
+    problems.push({ code: "expected_list", path: at })
     return []
   }
   const str = (v: unknown) => (v == null ? "" : String(v))
@@ -307,7 +322,7 @@ function sitesFromConfig(doc: unknown): Site[] {
         const { key, value } = o as { key: unknown; value?: unknown }
         return { id: newId(), text: `${str(key)} ${str(value)}`.trim() }
       }
-      problems.push(`${at}[${i}]: expected a string or a key and a value`)
+      problems.push({ code: "expected_directive", path: `${at}[${i}]` })
       return { id: newId(), text: "" }
     })
 
@@ -363,32 +378,36 @@ function compact<T extends object>(o: T): T {
   ) as T
 }
 
-const fieldLabels: Record<string, string> = {
-  server_name: "Domains",
-  listen_port: "Listen port",
-  cert_name: "Certificate",
-  path: "Path prefix",
-  ip: "Upstream host",
-  port: "Port",
+// KeyLabels name the parts of the builder, for describeKey.
+export type KeyLabels = {
+  newSite: string
+  defaultRoute: string
+  newRoute: string
+  directive: string
+  fields: Record<string, string> // by name in the schema, such as "port"
 }
 
 // describeKey describes where the input with the given key is, such as
 // "example.com › /api › Port".
-export function describeKey(sites: Site[], key: string): string {
+export function describeKey(
+  sites: Site[],
+  key: string,
+  labels: KeyLabels
+): string {
   const m = /^s:([^/.]+)(?:\/r:([^/.]+))?(?:\/d:([^/.]+))?(?:\.(\w+))?$/.exec(
     key
   )
   if (!m) return key
   const [, siteId, routeId, directiveId, field] = m
   const site = sites.find((s) => s.id === siteId)
-  const parts = [(site && domainsOf(site)[0]) || "New site"]
+  const parts = [(site && domainsOf(site)[0]) || labels.newSite]
   if (routeId && site) {
     const route = [site.root, ...site.routes].find((r) => r.id === routeId)
     parts.push(
-      route === site.root ? "Default route" : route?.path || "New route"
+      route === site.root ? labels.defaultRoute : route?.path || labels.newRoute
     )
   }
-  if (directiveId) parts.push("Extra directive")
-  else if (field) parts.push(fieldLabels[field] ?? field)
+  if (directiveId) parts.push(labels.directive)
+  else if (field) parts.push(labels.fields[field] ?? field)
   return parts.join(" › ")
 }

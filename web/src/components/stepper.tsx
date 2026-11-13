@@ -1,6 +1,7 @@
 import { Check } from "lucide-react"
 import { cn } from "cn"
 
+import { useI18n } from "@/lib/i18n"
 import type { StepId } from "@/lib/model"
 
 export type StepInfo = { id: StepId; title: string; description: string }
@@ -16,9 +17,10 @@ export function Stepper({
   problems: Record<StepId, number>
   onSelect: (step: StepId) => void
 }) {
+  const { t } = useI18n()
   const currentIndex = steps.findIndex((s) => s.id === current)
   return (
-    <nav aria-label="Steps">
+    <nav aria-label={t.app.steps}>
       <ol className="flex items-center gap-3">
         {steps.map((step, i) => {
           const isCurrent = i === currentIndex
@@ -65,9 +67,7 @@ export function Stepper({
                       count > 0 && "text-destructive"
                     )}
                   >
-                    {count > 0
-                      ? `${count} ${count === 1 ? "problem" : "problems"}`
-                      : step.description}
+                    {count > 0 ? t.steps.problems(count) : step.description}
                   </span>
                 </span>
               </button>

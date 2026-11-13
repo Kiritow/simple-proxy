@@ -43,7 +43,9 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import type { FieldProblem } from "@/lib/api"
 import type { Certificates, Problems } from "@/lib/hooks"
+import { describeProblem, useI18n } from "@/lib/i18n"
 import {
   certCovers,
   certificateOf,
@@ -71,6 +73,7 @@ export function SitesStep({
   onImport: () => void
   onLoadExample: () => void
 }) {
+  const { t } = useI18n()
   const add = () => {
     const site = newSite()
     setSites((ss) => [...ss, site])
@@ -82,23 +85,23 @@ export function SitesStep({
   return (
     <div className="space-y-6">
       <StepHeader
-        title="Sites"
-        description="Each site is an nginx server block answering for one or more domains."
+        title={t.sites.title}
+        description={t.sites.description}
         actions={
           <>
             {sites.length > 0 && (
               <ConfirmButton
-                title="Remove all sites?"
-                description="This removes every site and its routes from the builder."
-                action="Remove all"
+                title={t.sites.clearAllTitle}
+                description={t.sites.clearAllText}
+                action={t.sites.clearAllAction}
                 onConfirm={() => setSites([])}
               >
-                <Button variant="ghost">Clear all</Button>
+                <Button variant="ghost">{t.sites.clearAll}</Button>
               </ConfirmButton>
             )}
             <Button onClick={add}>
               <Plus />
-              Add site
+              {t.sites.add}
             </Button>
           </>
         }
@@ -110,25 +113,22 @@ export function SitesStep({
             <EmptyMedia variant="icon">
               <Globe />
             </EmptyMedia>
-            <EmptyTitle>No sites yet</EmptyTitle>
-            <EmptyDescription>
-              Add a site for each domain nginx should proxy, or import an
-              existing config.yaml.
-            </EmptyDescription>
+            <EmptyTitle>{t.sites.emptyTitle}</EmptyTitle>
+            <EmptyDescription>{t.sites.emptyText}</EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
             <div className="flex gap-2">
               <Button onClick={add}>
                 <Plus />
-                Add site
+                {t.sites.add}
               </Button>
               <Button variant="outline" onClick={onImport}>
                 <FileUp />
-                Import YAML
+                {t.sites.importYaml}
               </Button>
             </div>
             <Button variant="link" size="sm" onClick={onLoadExample}>
-              or start from the example
+              {t.sites.fromExample}
             </Button>
           </EmptyContent>
         </Empty>
@@ -172,6 +172,7 @@ function SiteCard({
   onDuplicate: () => void
   onRemove: () => void
 }) {
+  const { t } = useI18n()
   const key = siteKey(site)
   const error = (field: string) => problems.byKey.get(`${key}.${field}`)
   const domains = domainsOf(site)
@@ -183,35 +184,35 @@ function SiteCard({
       <CardHeader>
         <CardTitle className="flex min-w-0 items-center gap-2">
           <Globe className="size-4 shrink-0 text-muted-foreground" />
-          <span className="truncate">{domains[0] ?? "New site"}</span>
+          <span className="truncate">{domains[0] ?? t.sites.newSite}</span>
           {domains.length > 1 && (
             <Badge variant="secondary">+{domains.length - 1}</Badge>
           )}
           <Badge variant="outline">
             {site.https ? "HTTPS" : "HTTP"} · {port}
           </Badge>
-          {!site.enabled && <Badge variant="secondary">Disabled</Badge>}
+          {!site.enabled && (
+            <Badge variant="secondary">{t.sites.disabled}</Badge>
+          )}
         </CardTitle>
-        <CardDescription>
-          {routes} {routes === 1 ? "route" : "routes"}
-        </CardDescription>
+        <CardDescription>{t.sites.routeCount(routes)}</CardDescription>
         <CardAction className="flex items-center gap-1">
           <Switch
             checked={site.enabled}
             onCheckedChange={(enabled) => onChange({ enabled })}
-            aria-label="Generate this site"
+            aria-label={t.sites.enabled}
             className="mr-2"
           />
-          <IconButton label="Duplicate site" onClick={onDuplicate}>
+          <IconButton label={t.sites.duplicate} onClick={onDuplicate}>
             <CopyPlus />
           </IconButton>
           <ConfirmButton
-            title={`Remove ${domains[0] ?? "this site"}?`}
-            description="The site and all of its routes are removed from the builder."
-            action="Remove"
+            title={t.sites.removeTitle(domains[0] ?? t.sites.removeThis)}
+            description={t.sites.removeText}
+            action={t.sites.removeAction}
             onConfirm={onRemove}
           >
-            <IconButton label="Remove site">
+            <IconButton label={t.sites.remove}>
               <Trash2 />
             </IconButton>
           </ConfirmButton>
@@ -222,16 +223,16 @@ function SiteCard({
           <div className="grid gap-4 sm:grid-cols-[1fr_9rem]">
             <TextField
               id={`${key}.server_name`}
-              label="Domains"
+              label={t.sites.domains}
               placeholder="example.com www.example.com"
-              description="Separate several domains with spaces."
+              description={t.sites.domainsHint}
               value={site.serverName}
               onChange={(e) => onChange({ serverName: e.target.value })}
               error={error("server_name")}
             />
             <TextField
               id={`${key}.listen_port`}
-              label="Listen port"
+              label={t.sites.listenPort}
               type="number"
               min={1}
               max={65535}
@@ -244,15 +245,15 @@ function SiteCard({
           <div className="grid gap-3 sm:grid-cols-2">
             <ToggleCard
               id={`${key}.https`}
-              title="HTTPS"
-              description="Serve over TLS and redirect plain HTTP to it."
+              title={t.sites.https}
+              description={t.sites.httpsText}
               checked={site.https}
               onCheckedChange={(https) => onChange({ https })}
             />
             <ToggleCard
               id={`${key}.gzip`}
-              title="Gzip"
-              description="Compress text responses such as HTML, CSS and JSON."
+              title={t.sites.gzip}
+              description={t.sites.gzipText}
               checked={site.gzip}
               onCheckedChange={(gzip) => onChange({ gzip })}
             />
@@ -289,9 +290,10 @@ function CertificateField({
 }: {
   site: Site
   certs: Certificates
-  error?: string
+  error?: FieldProblem
   onChange: (certName: string) => void
 }) {
+  const { t } = useI18n()
   const id = `${siteKey(site)}.cert_name`
   const domains = domainsOf(site)
 
@@ -299,15 +301,15 @@ function CertificateField({
     return (
       <TextField
         id={id}
-        label="Certificate"
+        label={t.sites.certificate}
         placeholder={domains[0] ?? "example.com"}
         value={site.certName}
         onChange={(e) => onChange(e.target.value)}
         error={error}
         description={
           certs.status === "loading"
-            ? "Loading certificates from acme.sh…"
-            : `The server could not list certificates (${certs.message}). Enter the name of an acme.sh certificate, or leave empty to use the first domain.`
+            ? t.sites.certLoading
+            : t.sites.certUnavailable(certs.message)
         }
       />
     )
@@ -322,14 +324,14 @@ function CertificateField({
 
   const cert = certificateOf(site)
   const uncovered = domains.filter((d) => !certCovers(cert, d))
-  let problem = error
+  let problem = error && describeProblem(t, error)
   if (!problem && cert && !known.has(cert)) {
-    problem = `acme.sh has no certificate named ${cert}.`
+    problem = t.sites.certMissing(cert)
   }
 
   return (
     <Field data-invalid={problem ? true : undefined}>
-      <FieldLabel htmlFor={id}>Certificate</FieldLabel>
+      <FieldLabel htmlFor={id}>{t.sites.certificate}</FieldLabel>
       <Select
         value={site.certName || AUTO}
         onValueChange={(v) => onChange(v === AUTO ? "" : v)}
@@ -343,7 +345,7 @@ function CertificateField({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={AUTO}>
-            Named after the first domain
+            {t.sites.certAuto}
             {domains[0] && <span className="font-mono">({domains[0]})</span>}
           </SelectItem>
           {names.length > 0 && <SelectSeparator />}
@@ -351,9 +353,11 @@ function CertificateField({
             <SelectItem key={name} value={name}>
               <span className="font-mono">{name}</span>
               {!known.has(name) ? (
-                <Badge variant="destructive">not found</Badge>
+                <Badge variant="destructive">{t.sites.certNotFound}</Badge>
               ) : (
-                covers(name) && <Badge variant="secondary">matches</Badge>
+                covers(name) && (
+                  <Badge variant="secondary">{t.sites.certMatches}</Badge>
+                )
               )}
             </SelectItem>
           ))}
@@ -364,8 +368,8 @@ function CertificateField({
       ) : (
         <FieldDescription>
           {uncovered.length > 0
-            ? `Warning: ${cert} does not cover ${uncovered.join(", ")}.`
-            : "Certificates issued by acme.sh on the server."}
+            ? t.sites.certUncovered(cert, uncovered.join(", "))
+            : t.sites.certHint}
         </FieldDescription>
       )}
     </Field>

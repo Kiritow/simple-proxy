@@ -22,6 +22,7 @@ import {
   type ApiError,
   type GenerateResult,
 } from "@/lib/api"
+import { describeProblem, useI18n, type Messages } from "@/lib/i18n"
 import {
   describeKey,
   resolveField,
@@ -39,6 +40,7 @@ export function PreviewStep({
   sites: Site[]
   onFix: (key: string) => void
 }) {
+  const { t } = useI18n()
   const [generated, setGenerated] = useState<Generated | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [tab, setTab] = useState("nginx")
@@ -90,20 +92,20 @@ export function PreviewStep({
   return (
     <div className="space-y-6">
       <StepHeader
-        title="Preview"
-        description="Check the generated configuration, then copy or download it."
+        title={t.preview.title}
+        description={t.preview.description}
         actions={
           <Button variant="outline" onClick={regenerate} disabled={!generated}>
             <RefreshCw />
-            Regenerate
+            {t.preview.regenerate}
           </Button>
         }
       />
 
       <div className="grid grid-cols-3 gap-3">
-        <Stat label="Sites" value={enabled.length} />
-        <Stat label="Routes" value={routes} />
-        <Stat label="HTTPS sites" value={https} />
+        <Stat label={t.preview.sites} value={enabled.length} />
+        <Stat label={t.preview.routes} value={routes} />
+        <Stat label={t.preview.httpsSites} value={https} />
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -121,7 +123,7 @@ export function PreviewStep({
                 onClick={copy}
               >
                 {copied ? <Check /> : <Copy />}
-                {copied ? "Copied" : "Copy"}
+                {copied ? t.preview.copied : t.preview.copy}
               </Button>
               <Button
                 size="sm"
@@ -131,7 +133,7 @@ export function PreviewStep({
                 }
               >
                 <Download />
-                Download
+                {t.preview.download}
               </Button>
             </CardAction>
           </CardHeader>
@@ -140,7 +142,7 @@ export function PreviewStep({
               {!result ? (
                 <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
                   <Spinner />
-                  Generating…
+                  {t.preview.generating}
                 </div>
               ) : result.ok ? (
                 <>
@@ -148,8 +150,7 @@ export function PreviewStep({
                     <NginxCode text={result.config} />
                   </CodeBlock>
                   <p className="text-xs text-muted-foreground">
-                    Include it in nginx's <code>http</code> context, e.g. as{" "}
-                    <code>/etc/nginx/conf.d/proxy.conf</code>.
+                    {t.preview.includeHint}
                   </p>
                 </>
               ) : (
@@ -166,8 +167,7 @@ export function PreviewStep({
                 <YamlCode text={yaml} />
               </CodeBlock>
               <p className="text-xs text-muted-foreground">
-                Keep this file to edit the configuration later with Import, or
-                to generate it with <code>curl</code>.
+                {t.preview.yamlHint}
               </p>
             </TabsContent>
           </CardContent>
@@ -199,6 +199,7 @@ function ProblemList({
   sites: Site[]
   onFix: (key: string) => void
 }) {
+  const { t } = useI18n()
   const items =
     error.fields.length > 0
       ? error.fields.map((f) => ({ ...f, key: resolveField(owners, f.field) }))
@@ -207,7 +208,7 @@ function ProblemList({
   return (
     <Alert variant="destructive">
       <CircleAlert />
-      <AlertTitle>{title(error.status)}</AlertTitle>
+      <AlertTitle>{title(t, error.status)}</AlertTitle>
       <AlertDescription>
         <ul className="mt-1 w-full divide-y divide-destructive/15">
           {items.map((p, i) => (
@@ -215,10 +216,10 @@ function ProblemList({
               <div className="min-w-0 flex-1">
                 {(p.key || p.field) && (
                   <p className="font-medium">
-                    {p.key ? describeKey(sites, p.key) : p.field}
+                    {p.key ? describeKey(sites, p.key, t.describe) : p.field}
                   </p>
                 )}
-                <p className="break-words">{p.message}</p>
+                <p className="break-words">{describeProblem(t, p)}</p>
               </div>
               {p.key && (
                 <Button
@@ -226,7 +227,7 @@ function ProblemList({
                   size="xs"
                   onClick={() => onFix(p.key!)}
                 >
-                  Fix
+                  {t.preview.fix}
                   <ArrowRight />
                 </Button>
               )}
@@ -238,15 +239,15 @@ function ProblemList({
   )
 }
 
-function title(status: number): string {
+function title(t: Messages, status: number): string {
   switch (status) {
     case 0:
-      return "The server is unreachable"
+      return t.preview.unreachable
     case 400:
-      return "The configuration has problems"
+      return t.preview.invalid
     case 422:
-      return "A certificate is missing"
+      return t.preview.certMissing
     default:
-      return `Generation failed (HTTP ${status})`
+      return t.preview.failed(status)
   }
 }

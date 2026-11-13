@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -232,8 +233,55 @@ func (e FieldErrors) Unwrap() []error {
 	return errs
 }
 
-func (e *FieldErrors) add(field, format string, args ...any) {
-	*e = append(*e, &FieldError{Field: field, Err: fmt.Errorf(format, args...)})
+func (e *FieldErrors) add(field string, code ProblemCode, value string) {
+	*e = append(*e, &FieldError{Field: field, Err: &Problem{Code: code, Value: value}})
+}
+
+// ProblemCode identifies a kind of validation problem, so that clients can
+// describe problems in their own words, e.g. in another language.
+type ProblemCode string
+
+const (
+	Required          ProblemCode = "required"
+	PortRequired      ProblemCode = "port_required" // and not inherited
+	InvalidName       ProblemCode = "invalid_name"
+	InvalidPort       ProblemCode = "invalid_port"
+	InvalidPath       ProblemCode = "invalid_path"
+	InvalidHost       ProblemCode = "invalid_host"
+	InvalidDirective  ProblemCode = "invalid_directive"
+	LineBreak         ProblemCode = "line_break"
+	Unquoted          ProblemCode = "unquoted"
+	TrailingBackslash ProblemCode = "trailing_backslash"
+	UnterminatedQuote ProblemCode = "unterminated_quote"
+)
+
+var problemText = map[ProblemCode]string{
+	Required:          "is required",
+	PortRequired:      "is required unless the default location sets one",
+	InvalidName:       "invalid name %q",
+	InvalidPort:       "%s is not a valid port",
+	InvalidPath:       "%q is not a URL path starting with /",
+	InvalidHost:       "%q is not an IP address or host name",
+	InvalidDirective:  "invalid directive name %q",
+	LineBreak:         "must not contain line breaks",
+	Unquoted:          "%q must be quoted or escaped",
+	TrailingBackslash: "ends with a backslash",
+	UnterminatedQuote: "has an unterminated quote",
+}
+
+// Problem is a validation problem with a field. Value is the offending
+// value, if the description of the problem mentions it.
+type Problem struct {
+	Code  ProblemCode
+	Value string
+}
+
+func (p *Problem) Error() string {
+	text := problemText[p.Code]
+	if strings.Contains(text, "%") {
+		return fmt.Sprintf(text, p.Value)
+	}
+	return text
 }
 
 // validate makes sure that c can be rendered without producing a broken
@@ -252,18 +300,18 @@ func (c *Config) validate() error {
 func (s Server) validate(p *FieldErrors, at string) {
 	names := strings.Fields(s.ServerName)
 	if len(names) == 0 {
-		p.add(at+".server_name", "is required")
+		p.add(at+".server_name", Required, "")
 	}
 	for _, name := range names {
 		if !isWord(name) {
-			p.add(at+".server_name", "invalid name %q", name)
+			p.add(at+".server_name", InvalidName, name)
 		}
 	}
 	if s.ListenPort != 0 && !isPort(s.ListenPort) {
-		p.add(at+".listen_port", "%d is not a valid port", s.ListenPort)
+		p.add(at+".listen_port", InvalidPort, strconv.Itoa(s.ListenPort))
 	}
 	if s.CertName != "" && !isWord(s.CertName) {
-		p.add(at+".cert_name", "invalid name %q", s.CertName)
+		p.add(at+".cert_name", InvalidName, s.CertName)
 	}
 	validateDirectives(p, at+".options", s.Options)
 
@@ -276,18 +324,18 @@ func (s Server) validate(p *FieldErrors, at string) {
 func (l Location) validate(p *FieldErrors, at string) {
 	switch {
 	case l.Path == "":
-		p.add(at+".path", "is required")
+		p.add(at+".path", Required, "")
 	case !strings.HasPrefix(l.Path, "/") || !isWord(l.Path):
-		p.add(at+".path", "%q is not a URL path starting with /", l.Path)
+		p.add(at+".path", InvalidPath, l.Path)
 	}
 	if !isHost(l.IP) {
-		p.add(at+".ip", "%q is not an IP address or host name", l.IP)
+		p.add(at+".ip", InvalidHost, l.IP)
 	}
 	switch {
 	case l.Port == 0 && l.Enabled():
-		p.add(at+".port", "is required unless the default location sets one")
+		p.add(at+".port", PortRequired, "")
 	case l.Port != 0 && !isPort(l.Port):
-		p.add(at+".port", "%d is not a valid port", l.Port)
+		p.add(at+".port", InvalidPort, strconv.Itoa(l.Port))
 	}
 	validateDirectives(p, at+".options", l.Options)
 }
@@ -298,10 +346,10 @@ func validateDirectives(p *FieldErrors, at string, ds []Directive) {
 	for i, d := range ds {
 		field := fmt.Sprintf("%s[%d]", at, i)
 		if !directiveName.MatchString(d.Name) {
-			p.add(field, "invalid directive name %q", d.Name)
+			p.add(field, InvalidDirective, d.Name)
 		}
-		if err := checkArgs(d.Args); err != nil {
-			p.add(field, "%v", err)
+		if code, value := checkArgs(d.Args); code != "" {
+			p.add(field, code, value)
 		}
 	}
 }
@@ -309,14 +357,14 @@ func validateDirectives(p *FieldErrors, at string, ds []Directive) {
 // checkArgs makes sure that args can be emitted verbatim as the arguments of
 // a single directive: it must fit on one line, and characters that would end
 // the directive, open or close a block, or start a comment must be quoted or
-// escaped.
-func checkArgs(args string) error {
+// escaped. If not, it returns the problem.
+func checkArgs(args string) (ProblemCode, string) {
 	var quote rune
 	escaped := false
 	for _, r := range args {
 		switch {
 		case r == '\n' || r == '\r':
-			return errors.New("must not contain line breaks")
+			return LineBreak, ""
 		case escaped:
 			escaped = false
 		case r == '\\':
@@ -328,16 +376,16 @@ func checkArgs(args string) error {
 		case r == '"' || r == '\'':
 			quote = r
 		case strings.ContainsRune(";{}#", r):
-			return fmt.Errorf("%q must be quoted or escaped", r)
+			return Unquoted, string(r)
 		}
 	}
 	switch {
 	case escaped:
-		return errors.New("ends with a backslash")
+		return TrailingBackslash, ""
 	case quote != 0:
-		return errors.New("has an unterminated quote")
+		return UnterminatedQuote, ""
 	}
-	return nil
+	return "", ""
 }
 
 // isWord reports whether s can be emitted as a single unquoted nginx token.

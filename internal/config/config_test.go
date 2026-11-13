@@ -173,10 +173,10 @@ func TestParseErrors(t *testing.T) {
 `,
 			[]string{
 				`options[0]: invalid directive name "Add-Header"`,
-				`options[1]: ';' must be quoted`,
+				`options[1]: ";" must be quoted`,
 				"options[2]: has an unterminated quote",
 				"options[3]: must not contain line breaks",
-				`options[4]: '}' must be quoted`,
+				`options[4]: "}" must be quoted`,
 				"options[5]: ends with a backslash",
 			},
 		},
@@ -260,5 +260,41 @@ func TestDecodeServer(t *testing.T) {
 		if _, err := config.DecodeServer([]byte(bad)); err == nil {
 			t.Errorf("DecodeServer(%q) succeeded, want an error", bad)
 		}
+	}
+}
+
+func TestProblemCodes(t *testing.T) {
+	_, err := config.Parse([]byte(`
+servers:
+- server_name: "a;b"
+  listen_port: 70000
+  default: {port: 0}
+  options: ["add_header X a;b"]
+`))
+	var errs config.FieldErrors
+	if !errors.As(err, &errs) {
+		t.Fatalf("Parse error = %v, want FieldErrors", err)
+	}
+	type problem struct {
+		Field string
+		Code  config.ProblemCode
+		Value string
+	}
+	var got []problem
+	for _, fe := range errs {
+		var p *config.Problem
+		if !errors.As(fe, &p) {
+			t.Fatalf("%v is not a *Problem", fe)
+		}
+		got = append(got, problem{fe.Field, p.Code, p.Value})
+	}
+	want := []problem{
+		{"servers[0].server_name", config.InvalidName, "a;b"},
+		{"servers[0].listen_port", config.InvalidPort, "70000"},
+		{"servers[0].options[0]", config.Unquoted, ";"},
+		{"servers[0].default.port", config.PortRequired, ""},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("problems = %+v\nwant %+v", got, want)
 	}
 }

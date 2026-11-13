@@ -14,6 +14,7 @@ import {
   saveSites,
   validateConfig,
   type ApiError,
+  type FieldProblem,
 } from "@/lib/api"
 import {
   fromStored,
@@ -187,7 +188,10 @@ export function useCertificates(): Certificates {
         if (active) setCerts({ status: "ready", names })
       },
       (err: unknown) => {
-        if (active) setCerts({ status: "unavailable", message: String(err) })
+        if (active) {
+          const message = err instanceof Error ? err.message : String(err)
+          setCerts({ status: "unavailable", message })
+        }
       }
     )
     return () => {
@@ -200,15 +204,15 @@ export function useCertificates(): Certificates {
 // Problems are the problems the server found with a configuration, by the
 // key of the input to fix. Problems that no input can fix are only reported
 // by the preview.
-export type Problems = { byKey: Map<string, string> }
+export type Problems = { byKey: Map<string, FieldProblem> }
 
 export const noProblems: Problems = { byKey: new Map() }
 
 function toProblems(err: ApiError, owners: Map<string, string>): Problems {
-  const byKey = new Map<string, string>()
+  const byKey = new Map<string, FieldProblem>()
   for (const f of err.fields) {
     const key = resolveField(owners, f.field)
-    if (key !== undefined) byKey.set(key, f.message)
+    if (key !== undefined) byKey.set(key, f)
   }
   return { byKey }
 }

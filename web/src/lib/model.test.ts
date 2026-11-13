@@ -125,21 +125,29 @@ test("resolveField maps server error paths to inputs", () => {
   assert.deepEqual(locate(`${r}.port`), { step: "routes", siteId: site.id })
 })
 
+const labels = {
+  newSite: "New site",
+  defaultRoute: "Default route",
+  newRoute: "New route",
+  directive: "Extra directive",
+  fields: { port: "Port", ip: "Upstream host" },
+}
+
 test("describeKey names the input", () => {
   const site = newSite()
   site.serverName = "example.com"
   const route = newRoute("/api")
   site.routes = [route]
   assert.equal(
-    describeKey([site], `${routeKey(site, route)}.port`),
+    describeKey([site], `${routeKey(site, route)}.port`, labels),
     "example.com › /api › Port"
   )
   assert.equal(
-    describeKey([site], `${routeKey(site, site.root)}.ip`),
+    describeKey([site], `${routeKey(site, site.root)}.ip`, labels),
     "example.com › Default route › Upstream host"
   )
   assert.equal(
-    describeKey([site], `${siteKey(site)}/d:z`),
+    describeKey([site], `${siteKey(site)}/d:z`, labels),
     "example.com › Extra directive"
   )
 })
@@ -173,11 +181,15 @@ test("parseYaml rejects unknown fields and bad documents", () => {
     problems(
       "servers:\n- server_name: a\n  websockets: true\n  default: {port: 1}\n"
     ),
-    ["servers[0].websockets: unknown field"]
+    [{ code: "unknown_field", path: "servers[0].websockets" }]
   )
-  assert.deepEqual(problems(""), ["the configuration is empty"])
-  assert.match(problems("servers: [")[0], /flow sequence/i)
-  assert.deepEqual(problems("servers: 3"), ["servers: expected a list"])
+  assert.deepEqual(problems(""), [{ code: "empty", path: "" }])
+  const [syntax] = problems("servers: [")
+  assert.equal(syntax.code, "syntax")
+  assert.match(syntax.detail ?? "", /flow sequence/i)
+  assert.deepEqual(problems("servers: 3"), [
+    { code: "expected_list", path: "servers" },
+  ])
 })
 
 test("certCovers matches exact and single-level wildcard names", () => {
