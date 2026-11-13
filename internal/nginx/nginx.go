@@ -63,7 +63,8 @@ var confTemplate = template.Must(template.New("nginx.conf").Parse(confTemplateTe
 // Generate returns the configuration of cfg, to be included in nginx's http
 // context. cfg must have been returned by config.Parse.
 //
-// If a certificate cannot be found, the error wraps ErrCertNotFound.
+// If a certificate cannot be found, the error is a *config.FieldError for the
+// server's cert_name field, wrapping ErrCertNotFound.
 func (g *Generator) Generate(ctx context.Context, cfg *config.Config) ([]byte, error) {
 	servers, err := g.servers(ctx, cfg)
 	if err != nil {
@@ -120,7 +121,7 @@ func (g *Generator) servers(ctx context.Context, cfg *config.Config) ([]server, 
 	// Servers often share a wildcard certificate, and lookups may be slow.
 	certs := make(map[string]Certificate)
 
-	for _, s := range cfg.Servers {
+	for i, s := range cfg.Servers {
 		if !s.Enabled() {
 			continue
 		}
@@ -132,7 +133,7 @@ func (g *Generator) servers(ctx context.Context, cfg *config.Config) ([]server, 
 			if !ok {
 				var err error
 				if cert, err = g.locateCert(ctx, name); err != nil {
-					return nil, fmt.Errorf("server %s: %w", s.ServerName, err)
+					return nil, &config.FieldError{Field: fmt.Sprintf("servers[%d].cert_name", i), Err: err}
 				}
 				certs[name] = cert
 			}

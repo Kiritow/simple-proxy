@@ -1,7 +1,14 @@
 # Simple Proxy
 
-Generate nginx reverse proxy configuration (the `http` context part) from a
-simple YAML file, from a web UI or over HTTP.
+Build nginx reverse proxy configuration (the `http` context part) in a web
+UI, or generate it from a simple YAML file over HTTP.
+
+The UI guides you through three steps: **Sites** (domains, HTTPS with a
+certificate picked from acme.sh, gzip), **Routes** (path prefixes and their
+upstreams, WebSocket, buffering and caching) and **Preview**, which shows the
+generated `proxy.conf`. Problems are pointed out next to the inputs as you
+type. Existing `config.yaml` files can be imported, and the configuration can
+be exported as YAML again.
 
 This is a Go rewrite of legacy-proxy-generator and accepts the same
 configuration files. Certificates are looked up with
@@ -72,13 +79,18 @@ must be single directives: `;`, `{`, `}` and `#` have to be quoted or escaped.
 
 ## HTTP API
 
-| Request              | Response                                                       |
-| -------------------- | -------------------------------------------------------------- |
-| `GET /api/example`   | The example configuration.                                     |
-| `POST /api/generate` | The nginx configuration generated from the YAML or JSON body. |
+| Request                 | Response                                                         |
+| ----------------------- | ---------------------------------------------------------------- |
+| `POST /api/generate`    | The nginx configuration generated from the YAML or JSON body.   |
+| `POST /api/validate`    | `204` if the configuration in the body is valid.                 |
+| `GET /api/certificates` | `{"certificates": [...]}`, the certificates acme.sh manages.     |
+| `GET /api/example`      | The example configuration.                                       |
 
-Responses are plain text. Errors return `400` for invalid configuration,
-`422` for missing certificates and `500` if acme.sh fails, with a message:
+Errors return `400` for invalid configuration, `422` for missing certificates
+and `500` (`503` for `/api/certificates`) if acme.sh fails. Responses are plain
+text, unless the request has `Accept: application/json`: then `generate`
+returns `{"config": "..."}`, and errors list the invalid fields as in
+`{"message": "...", "fields": [{"field": "servers[0].default.port", "message": "is required ..."}]}`.
 
 ```bash
 curl --data-binary @config.yaml http://127.0.0.1:8080/api/generate > proxy.conf
@@ -93,6 +105,7 @@ internal/nginx     configuration generator (nginx.conf.tmpl)
 internal/acme      certificate lookup through acme.sh
 internal/web       HTTP handlers, embeds the UI from internal/web/dist
 web/               UI: React, Tailwind CSS and shadcn/ui
+web/src/lib/model.ts  the UI's model and its conversion to and from YAML
 ```
 
 The built UI in `internal/web/dist` is committed, so building the server only
@@ -106,9 +119,9 @@ go generate ./internal/web    # runs npm run build
 `npm --prefix web run dev` serves the UI with hot reload and proxies `/api` to
 a server running on the default address.
 
-Run `go test ./...` for the tests, and `go test ./internal/nginx -update` to
-rewrite the golden files in `internal/nginx/testdata` after intended output
-changes.
+Run `go test ./...` and `npm --prefix web test` for the tests, and
+`go test ./internal/nginx -update` to rewrite the golden files in
+`internal/nginx/testdata` after intended output changes.
 
 ## Differences from legacy-proxy-generator
 

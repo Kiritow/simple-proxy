@@ -29,7 +29,7 @@ func NewLocator(bin string) *Locator { return &Locator{bin: bin} }
 func (l *Locator) LocateCert(ctx context.Context, name string) (nginx.Certificate, error) {
 	// Check name against the certificate list first, so that only names
 	// reported by acme.sh itself are ever passed back to it as arguments.
-	domains, err := l.domains(ctx)
+	domains, err := l.ListCerts(ctx)
 	if err != nil {
 		return nginx.Certificate{}, err
 	}
@@ -48,8 +48,9 @@ func (l *Locator) LocateCert(ctx context.Context, name string) (nginx.Certificat
 	}, nil
 }
 
-// domains returns the main domains of the certificates managed by acme.sh.
-func (l *Locator) domains(ctx context.Context) ([]string, error) {
+// ListCerts returns the names, i.e. the main domains, of the certificates
+// managed by acme.sh.
+func (l *Locator) ListCerts(ctx context.Context) ([]string, error) {
 	out, err := l.run(ctx, "--list", "--listraw")
 	if err != nil {
 		return nil, err

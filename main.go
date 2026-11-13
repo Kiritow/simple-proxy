@@ -45,13 +45,14 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	_ = flags.Parse(args) // ExitOnError: Parse exits instead of returning errors
 
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
+	locator := acme.NewLocator(*acmeBin)
 	gen := &nginx.Generator{
-		Certs:        acme.NewLocator(*acmeBin),
+		Certs:        locator,
 		FallbackCert: *fallbackCert,
 		FallbackKey:  *fallbackKey,
 	}
 	srv := &http.Server{
-		Handler:           web.NewHandler(gen, exampleConfig, logger),
+		Handler:           web.NewHandler(gen, locator, exampleConfig, logger),
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}

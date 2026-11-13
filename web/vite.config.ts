@@ -17,6 +17,9 @@ export default defineConfig({
     // Embedded into the Go binary by internal/web.
     outDir: "../internal/web/dist",
     emptyOutDir: true,
+    // The UI is one page served by the tool itself (about 160 kB gzipped),
+    // so splitting it into chunks would not make it load any faster.
+    chunkSizeWarningLimit: 800,
   },
   server: {
     // `npm run dev` expects the Go server on its default address.

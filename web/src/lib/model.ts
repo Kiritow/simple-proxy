@@ -1,0 +1,377 @@
+// The builder's model of a configuration, and its conversion to and from the
+// schema of internal/config (see config.yaml.example).
+
+import { parse, stringify } from "yaml"
+
+export type Directive = { id: string; text: string }
+
+export type Route = {
+  id: string
+  enabled: boolean
+  path: string
+  host: string // empty: inherited
+  port: string // empty: inherited
+  websocket: boolean
+  disableCache: boolean
+  realtime: boolean
+  options: Directive[]
+}
+
+export type Site = {
+  id: string
+  enabled: boolean
+  serverName: string
+  https: boolean
+  certName: string // empty: named after the first domain
+  listenPort: string // empty: 80 or 443
+  gzip: boolean
+  options: Directive[]
+  root: Route // the default location; its upstream is inherited by routes
+  routes: Route[]
+}
+
+export const DEFAULT_HOST = "127.0.0.1"
+
+let seq = 0
+export const newId = () => Date.now().toString(36) + (seq++).toString(36)
+
+export function newRoute(path = ""): Route {
+  return {
+    id: newId(),
+    enabled: true,
+    path,
+    host: "",
+    port: "",
+    websocket: false,
+    disableCache: false,
+    realtime: false,
+    options: [],
+  }
+}
+
+export function newSite(): Site {
+  return {
+    id: newId(),
+    enabled: true,
+    serverName: "",
+    https: false,
+    certName: "",
+    listenPort: "",
+    gzip: false,
+    options: [],
+    root: newRoute("/"),
+    routes: [],
+  }
+}
+
+const cloneDirectives = (ds: Directive[]) =>
+  ds.map((d) => ({ ...d, id: newId() }))
+
+const cloneRoute = (r: Route): Route => ({
+  ...r,
+  id: newId(),
+  options: cloneDirectives(r.options),
+})
+
+export function cloneSite(s: Site): Site {
+  return {
+    ...s,
+    id: newId(),
+    options: cloneDirectives(s.options),
+    root: cloneRoute(s.root),
+    routes: s.routes.map(cloneRoute),
+  }
+}
+
+export const domainsOf = (s: Site) => s.serverName.split(/\s+/).filter(Boolean)
+
+// certificateOf returns the name of the certificate served by s.
+export const certificateOf = (s: Site) => s.certName || domainsOf(s)[0] || ""
+
+// certCovers reports whether the certificate named cert is valid for domain.
+export function certCovers(cert: string, domain: string): boolean {
+  if (cert === domain) return true
+  if (!cert.startsWith("*.")) return false
+  const suffix = cert.slice(1) // ".example.com"
+  const label = domain.slice(0, -suffix.length)
+  return domain.endsWith(suffix) && label !== "" && !label.includes(".")
+}
+
+// Keys identify the inputs of sites, routes and directives, so that problems
+// reported by the server can be shown next to them. A field's key is the key
+// of its owner followed by the field's name in the schema, e.g. ".port".
+
+export const siteKey = (s: Site) => `s:${s.id}`
+export const routeKey = (s: Site, r: Route) => `${siteKey(s)}/r:${r.id}`
+export const directiveKey = (owner: string, d: Directive) =>
+  `${owner}/d:${d.id}`
+
+export type StepId = "sites" | "routes" | "preview"
+
+// locate returns the step and the site that the input with the given key is on.
+export function locate(key: string): { step: StepId; siteId: string } {
+  return {
+    step: key.includes("/r:") ? "routes" : "sites",
+    siteId: /^s:([^/.]+)/.exec(key)?.[1] ?? "",
+  }
+}
+
+// The JSON form of the configuration schema.
+
+type LocationJSON = {
+  enable?: false
+  path?: string
+  ip?: string
+  port?: number
+  websocket?: true
+  disable_cache?: true
+  realtime?: true
+  options?: string[]
+}
+
+type ServerJSON = {
+  server_name: string
+  enable?: false
+  listen_port?: number
+  https?: true
+  cert_name?: string
+  gzip?: true
+  options?: string[]
+  default: LocationJSON
+  locations?: LocationJSON[]
+}
+
+export type ConfigJSON = { servers: ServerJSON[] }
+
+// Serialized is a configuration together with the key of every site, route
+// and directive in it, indexed by their paths in server-side errors, such as
+// "servers[0].locations[1]".
+export type Serialized = { config: ConfigJSON; owners: Map<string, string> }
+
+export function serialize(sites: Site[]): Serialized {
+  const owners = new Map<string, string>()
+
+  const options = (ds: Directive[], owner: string, at: string) => {
+    const out: string[] = []
+    for (const d of ds) {
+      const text = d.text.trim()
+      if (!text) continue
+      owners.set(`${at}.options[${out.length}]`, directiveKey(owner, d))
+      out.push(text)
+    }
+    return out.length > 0 ? out : undefined
+  }
+
+  const location = (site: Site, r: Route, at: string): LocationJSON => {
+    const owner = routeKey(site, r)
+    owners.set(at, owner)
+    const path = r.path.trim()
+    return compact({
+      enable: r.enabled ? undefined : false,
+      path: r === site.root && path === "/" ? undefined : path || undefined,
+      ip: r.host.trim() || undefined,
+      port: toNumber(r.port),
+      websocket: r.websocket || undefined,
+      disable_cache: r.disableCache || undefined,
+      realtime: r.realtime || undefined,
+      options: options(r.options, owner, at),
+    })
+  }
+
+  const servers = sites.map((site, i): ServerJSON => {
+    const at = `servers[${i}]`
+    owners.set(at, siteKey(site))
+    return compact({
+      server_name: domainsOf(site).join(" "),
+      enable: site.enabled ? undefined : false,
+      listen_port: toNumber(site.listenPort),
+      https: site.https || undefined,
+      cert_name: (site.https && site.certName.trim()) || undefined,
+      gzip: site.gzip || undefined,
+      options: options(site.options, siteKey(site), at),
+      default: location(site, site.root, `${at}.default`),
+      locations:
+        site.routes.length > 0
+          ? site.routes.map((r, j) =>
+              location(site, r, `${at}.locations[${j}]`)
+            )
+          : undefined,
+    })
+  })
+  return { config: { servers }, owners }
+}
+
+// resolveField returns the key of the input for a path in a server-side
+// error, such as "servers[0].locations[1].port", or undefined.
+export function resolveField(
+  owners: Map<string, string>,
+  path: string
+): string | undefined {
+  for (let prefix = path; ;) {
+    const owner = owners.get(prefix)
+    if (owner !== undefined) return owner + path.slice(prefix.length)
+    const parent = prefix.replace(/(\.\w+|\[\d+\])$/, "")
+    if (parent === prefix) return undefined
+    prefix = parent
+  }
+}
+
+export function toYaml(sites: Site[]): string {
+  return stringify(serialize(sites).config, { lineWidth: 0 })
+}
+
+export class ImportError extends Error {
+  readonly problems: string[]
+  constructor(problems: string[]) {
+    super(problems.join("\n"))
+    this.problems = problems
+  }
+}
+
+const serverFields = new Set([
+  "server_name",
+  "enable",
+  "listen_port",
+  "https",
+  "cert_name",
+  "gzip",
+  "options",
+  "default",
+  "locations",
+])
+
+const locationFields = new Set([
+  "enable",
+  "path",
+  "ip",
+  "port",
+  "websocket",
+  "disable_cache",
+  "realtime",
+  "options",
+])
+
+// parseYaml converts a YAML (or JSON) configuration into sites. Like the
+// server, it rejects unknown fields; other problems are left for the server
+// to report once the sites are in the builder.
+export function parseYaml(text: string): Site[] {
+  let doc: unknown
+  try {
+    doc = parse(text)
+  } catch (err) {
+    throw new ImportError([err instanceof Error ? err.message : String(err)])
+  }
+  if (doc == null) throw new ImportError(["the configuration is empty"])
+
+  const problems: string[] = []
+  const mapping = (v: unknown, at: string, fields: Set<string>) => {
+    if (v == null) return {}
+    if (typeof v !== "object" || Array.isArray(v)) {
+      problems.push(`${at}: expected a mapping`)
+      return {}
+    }
+    for (const key of Object.keys(v)) {
+      if (!fields.has(key)) problems.push(`${at}.${key}: unknown field`)
+    }
+    return v as Record<string, unknown>
+  }
+  const list = (v: unknown, at: string): unknown[] => {
+    if (v == null) return []
+    if (Array.isArray(v)) return v
+    problems.push(`${at}: expected a list`)
+    return []
+  }
+  const str = (v: unknown) => (v == null ? "" : String(v))
+
+  const directives = (v: unknown, at: string): Directive[] =>
+    list(v, at).map((o, i) => {
+      if (typeof o === "string") return { id: newId(), text: o.trim() }
+      if (o && typeof o === "object" && "key" in o) {
+        const { key, value } = o as { key: unknown; value?: unknown }
+        return { id: newId(), text: `${str(key)} ${str(value)}`.trim() }
+      }
+      problems.push(`${at}[${i}]: expected a string or a key and a value`)
+      return { id: newId(), text: "" }
+    })
+
+  const route = (v: unknown, at: string): Route => {
+    const l = mapping(v, at, locationFields)
+    return {
+      id: newId(),
+      enabled: l.enable !== false,
+      path: str(l.path),
+      host: str(l.ip),
+      port: str(l.port),
+      websocket: l.websocket === true,
+      disableCache: l.disable_cache === true,
+      realtime: l.realtime === true,
+      options: directives(l.options, `${at}.options`),
+    }
+  }
+
+  const root = mapping(doc, "config", new Set(["servers"]))
+  const sites = list(root.servers, "servers").map((v, i): Site => {
+    const at = `servers[${i}]`
+    const s = mapping(v, at, serverFields)
+    const def = route(s.default, `${at}.default`)
+    def.path ||= "/"
+    return {
+      id: newId(),
+      enabled: s.enable !== false,
+      serverName: str(s.server_name),
+      https: s.https === true || (s.https == null && !!s.cert_name),
+      certName: str(s.cert_name),
+      listenPort: str(s.listen_port),
+      gzip: s.gzip === true,
+      options: directives(s.options, `${at}.options`),
+      root: def,
+      routes: list(s.locations, `${at}.locations`).map((l, j) =>
+        route(l, `${at}.locations[${j}]`)
+      ),
+    }
+  })
+  if (problems.length > 0) throw new ImportError(problems)
+  return sites
+}
+
+function toNumber(s: string): number | undefined {
+  const n = Number(s)
+  return s.trim() === "" || Number.isNaN(n) ? undefined : n
+}
+
+// compact drops undefined fields, keeping the YAML export minimal.
+function compact<T extends object>(o: T): T {
+  return Object.fromEntries(
+    Object.entries(o).filter(([, v]) => v !== undefined)
+  ) as T
+}
+
+const fieldLabels: Record<string, string> = {
+  server_name: "Domains",
+  listen_port: "Listen port",
+  cert_name: "Certificate",
+  path: "Path prefix",
+  ip: "Upstream host",
+  port: "Port",
+}
+
+// describeKey describes where the input with the given key is, such as
+// "example.com › /api › Port".
+export function describeKey(sites: Site[], key: string): string {
+  const m = /^s:([^/.]+)(?:\/r:([^/.]+))?(?:\/d:([^/.]+))?(?:\.(\w+))?$/.exec(
+    key
+  )
+  if (!m) return key
+  const [, siteId, routeId, directiveId, field] = m
+  const site = sites.find((s) => s.id === siteId)
+  const parts = [(site && domainsOf(site)[0]) || "New site"]
+  if (routeId && site) {
+    const route = [site.root, ...site.routes].find((r) => r.id === routeId)
+    parts.push(
+      route === site.root ? "Default route" : route?.path || "New route"
+    )
+  }
+  if (directiveId) parts.push("Extra directive")
+  else if (field) parts.push(fieldLabels[field] ?? field)
+  return parts.join(" › ")
+}

@@ -1,221 +1,174 @@
-import { useCallback, useEffect, useState } from "react"
-import {
-  Check,
-  Copy,
-  Download,
-  FileCode2,
-  LoaderCircle,
-  Play,
-  RotateCcw,
-  ServerCog,
-  Waypoints,
-} from "lucide-react"
+import { useEffect, useState } from "react"
+import { ArrowLeft, ArrowRight, FileUp, Waypoints } from "lucide-react"
 
-import { OutputView } from "@/components/output-view"
+import { ImportDialog } from "@/components/import-dialog"
+import { PreviewStep } from "@/components/preview-step"
+import { RoutesStep } from "@/components/routes-step"
+import { SitesStep } from "@/components/sites-step"
+import { Stepper, type StepInfo } from "@/components/stepper"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { fetchExample } from "@/lib/api"
+import { useCertificates, usePersistentState, useValidation } from "@/lib/hooks"
 import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { Kbd, KbdGroup } from "@/components/ui/kbd"
-import { Textarea } from "@/components/ui/textarea"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
-import {
-  copyText,
-  fetchExample,
-  generateConfig,
-  type GenerateResult,
-} from "@/lib/api"
+  domainsOf,
+  locate,
+  parseYaml,
+  type Site,
+  type StepId,
+} from "@/lib/model"
 
-const draftKey = "simple-proxy:draft"
-const initialDraft = localStorage.getItem(draftKey) ?? ""
-const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent)
+const steps: StepInfo[] = [
+  { id: "sites", title: "Sites", description: "Domains and HTTPS" },
+  { id: "routes", title: "Routes", description: "Paths and upstreams" },
+  { id: "preview", title: "Preview", description: "proxy.conf" },
+]
 
 export function App() {
-  const [source, setSource] = useState(initialDraft)
-  const [result, setResult] = useState<GenerateResult | null>(null)
-  const [pending, setPending] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [sites, setSites] = usePersistentState<Site[]>(
+    "simple-proxy:sites:v1",
+    () => []
+  )
+  const [step, setStep] = useState<StepId>("sites")
+  const [selectedSiteId, setSelectedSiteId] = useState("")
+  const [importOpen, setImportOpen] = useState(false)
+  const [focusRequest, setFocusRequest] = useState<{ key: string } | null>(null)
+  const certs = useCertificates()
+  const problems = useValidation(sites)
 
-  useEffect(() => localStorage.setItem(draftKey, source), [source])
-
-  const showError = (err: unknown) =>
-    setResult({ ok: false, status: 0, message: String(err) })
-
-  const loadExample = () => fetchExample().then(setSource, showError)
-
-  // Greet first-time visitors with the example instead of an empty editor.
+  // Focus the requested input once its step has been rendered.
   useEffect(() => {
-    if (initialDraft) return
-    let active = true
-    fetchExample().then(
-      (example) => {
-        if (active) setSource(example)
-      },
-      (err) => {
-        if (active) setResult({ ok: false, status: 0, message: String(err) })
-      }
-    )
-    return () => {
-      active = false
-    }
-  }, [])
+    if (!focusRequest) return
+    const el = document.getElementById(focusRequest.key)
+    el?.scrollIntoView({ block: "center", behavior: "smooth" })
+    el?.focus({ preventScroll: true })
+  }, [focusRequest])
 
-  const generate = useCallback(async () => {
-    setPending(true)
-    setResult(await generateConfig(source))
-    setPending(false)
-  }, [source])
+  const focus = (key: string) => setFocusRequest({ key })
 
-  const config = result?.ok ? result.config : null
-
-  const copy = async () => {
-    if (config === null) return
-    try {
-      await copyText(config)
-    } catch (err) {
-      console.error(err) // e.g. clipboard permission denied
-      return
-    }
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+  const show = (next: StepId) => {
+    setStep(next)
+    window.scrollTo({ top: 0 })
   }
 
-  const download = () => {
-    if (config === null) return
-    const url = URL.createObjectURL(new Blob([config], { type: "text/plain" }))
-    Object.assign(document.createElement("a"), {
-      href: url,
-      download: "proxy.conf",
-    }).click()
-    setTimeout(() => URL.revokeObjectURL(url))
+  const goTo = (key: string) => {
+    const { step, siteId } = locate(key)
+    setStep(step)
+    if (step === "routes") setSelectedSiteId(siteId)
+    focus(key)
   }
+
+  const importSites = (imported: Site[]) => {
+    setSites(imported)
+    setSelectedSiteId("")
+    show("sites")
+  }
+
+  const loadExample = () =>
+    fetchExample()
+      .then(parseYaml)
+      .then(importSites, (err: unknown) => {
+        console.error(err)
+        setImportOpen(true)
+      })
+
+  const counts: Record<StepId, number> = { sites: 0, routes: 0, preview: 0 }
+  for (const key of problems.byKey.keys()) counts[locate(key).step]++
+
+  const index = steps.findIndex((s) => s.id === step)
+  const enabled = sites.filter((s) => s.enabled)
 
   return (
-    <div className="flex h-svh flex-col">
-      <header className="flex items-center gap-3 border-b px-4 py-3 sm:px-6">
-        <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-          <Waypoints className="size-5" />
+    <div className="flex min-h-svh flex-col">
+      <header className="sticky top-0 z-20 border-b bg-background/85 backdrop-blur">
+        <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 pt-3 sm:px-6">
+          <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <Waypoints className="size-5" />
+          </div>
+          <div className="mr-auto">
+            <h1 className="font-heading text-base leading-tight font-semibold">
+              Simple Proxy
+            </h1>
+            <p className="text-xs text-muted-foreground">
+              nginx reverse proxy builder
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setImportOpen(true)}
+          >
+            <FileUp />
+            Import
+          </Button>
+          <ThemeToggle />
         </div>
-        <div className="mr-auto">
-          <h1 className="font-heading text-base leading-tight font-semibold">
-            Simple Proxy
-          </h1>
-          <p className="text-xs text-muted-foreground">
-            Generate nginx reverse proxy configuration from YAML
-          </p>
+        <div className="mx-auto max-w-5xl px-4 py-3 sm:px-6">
+          <Stepper
+            steps={steps}
+            current={step}
+            problems={counts}
+            onSelect={show}
+          />
         </div>
-        <ThemeToggle />
       </header>
 
-      <main className="grid flex-1 gap-4 overflow-y-auto p-4 sm:p-6 lg:min-h-0 lg:grid-cols-2 lg:overflow-hidden">
-        <Card className="min-h-[32rem] lg:min-h-0">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileCode2 className="size-4 text-muted-foreground" />
-              config.yaml
-            </CardTitle>
-            <CardDescription>
-              Virtual hosts and the upstreams they proxy to.
-            </CardDescription>
-            <CardAction className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={loadExample}>
-                <RotateCcw />
-                Example
-              </Button>
-              <Button size="sm" onClick={generate} disabled={pending}>
-                {pending ? <LoaderCircle className="animate-spin" /> : <Play />}
-                Generate
-                <KbdGroup className="ml-1 hidden sm:inline-flex">
-                  <Kbd>{isMac ? "⌘" : "Ctrl"}</Kbd>
-                  <Kbd>↵</Kbd>
-                </KbdGroup>
-              </Button>
-            </CardAction>
-          </CardHeader>
-          <CardContent className="flex min-h-0 flex-1">
-            <Textarea
-              value={source}
-              onChange={(e) => setSource(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                  e.preventDefault()
-                  void generate()
-                }
-              }}
-              spellCheck={false}
-              wrap="off"
-              autoCapitalize="off"
-              autoCorrect="off"
-              aria-label="Proxy configuration (YAML)"
-              className="field-sizing-fixed flex-1 resize-none bg-muted/40 font-mono text-[13px] leading-relaxed md:text-[13px] dark:bg-muted/20"
-            />
-          </CardContent>
-        </Card>
-
-        <Card className="min-h-[32rem] lg:min-h-0">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ServerCog className="size-4 text-muted-foreground" />
-              proxy.conf
-              {result && (
-                <Badge
-                  key={String(result.ok)}
-                  variant={result.ok ? "secondary" : "destructive"}
-                >
-                  {result.ok
-                    ? `${result.config.trimEnd().split("\n").length} lines`
-                    : "Error"}
-                </Badge>
-              )}
-            </CardTitle>
-            <CardDescription>
-              Include it in nginx's <code>http</code> context, e.g. in{" "}
-              <code>conf.d/</code>.
-            </CardDescription>
-            <CardAction className="flex gap-2">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon-sm"
-                    disabled={config === null}
-                    onClick={copy}
-                    aria-label="Copy to clipboard"
-                  >
-                    {copied ? <Check /> : <Copy />}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {copied ? "Copied" : "Copy to clipboard"}
-                </TooltipContent>
-              </Tooltip>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={config === null}
-                onClick={download}
-              >
-                <Download />
-                Download
-              </Button>
-            </CardAction>
-          </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col">
-            <OutputView result={result} />
-          </CardContent>
-        </Card>
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 sm:px-6">
+        {step === "sites" && (
+          <SitesStep
+            sites={sites}
+            setSites={setSites}
+            problems={problems}
+            certs={certs}
+            focus={focus}
+            onImport={() => setImportOpen(true)}
+            onLoadExample={loadExample}
+          />
+        )}
+        {step === "routes" && (
+          <RoutesStep
+            sites={sites}
+            setSites={setSites}
+            selectedId={selectedSiteId}
+            onSelect={setSelectedSiteId}
+            problems={problems}
+            focus={focus}
+            onBack={() => show("sites")}
+          />
+        )}
+        {step === "preview" && <PreviewStep sites={sites} onFix={goTo} />}
       </main>
+
+      <footer className="sticky bottom-0 z-20 border-t bg-background/85 backdrop-blur">
+        <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3 sm:px-6">
+          <Button
+            variant="outline"
+            disabled={index === 0}
+            onClick={() => show(steps[index - 1].id)}
+          >
+            <ArrowLeft />
+            Back
+          </Button>
+          <p className="mx-auto truncate text-xs text-muted-foreground">
+            {enabled.length === 0
+              ? "No sites yet"
+              : enabled.flatMap(domainsOf).slice(0, 3).join(", ") +
+                (enabled.flatMap(domainsOf).length > 3 ? ", …" : "")}
+          </p>
+          {index < steps.length - 1 && (
+            <Button onClick={() => show(steps[index + 1].id)}>
+              {steps[index + 1].title}
+              <ArrowRight />
+            </Button>
+          )}
+        </div>
+      </footer>
+
+      <ImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onImport={importSites}
+      />
     </div>
   )
 }

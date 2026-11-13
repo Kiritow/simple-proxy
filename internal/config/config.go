@@ -151,8 +151,9 @@ func (d *Directive) UnmarshalYAML(node *yaml.Node) error {
 // YAML), fills in inherited defaults and validates the result.
 //
 // Unknown fields are rejected so that typos do not silently change the
-// generated configuration. In the returned Config, every Location has its
-// Path and IP set, and every enabled Location has a valid Port.
+// generated configuration. If the document decodes but is invalid, the error
+// is a FieldErrors. In the returned Config, every Location has its Path and IP
+// set, and every enabled Location has a valid Port.
 func Parse(data []byte) (*Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -184,24 +185,54 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-// problems collects validation errors.
-type problems []error
+// FieldError reports a problem with one field of a configuration.
+type FieldError struct {
+	// Field is the path of the field, such as "servers[0].locations[1].port".
+	Field string
+	Err   error
+}
 
-func (p *problems) add(field, format string, args ...any) {
-	*p = append(*p, fmt.Errorf("%s: %s", field, fmt.Sprintf(format, args...)))
+func (e *FieldError) Error() string { return e.Field + ": " + e.Err.Error() }
+
+func (e *FieldError) Unwrap() error { return e.Err }
+
+// FieldErrors lists the problems found in a configuration.
+type FieldErrors []*FieldError
+
+func (e FieldErrors) Error() string {
+	msgs := make([]string, len(e))
+	for i, fe := range e {
+		msgs[i] = fe.Error()
+	}
+	return strings.Join(msgs, "\n")
+}
+
+func (e FieldErrors) Unwrap() []error {
+	errs := make([]error, len(e))
+	for i, fe := range e {
+		errs[i] = fe
+	}
+	return errs
+}
+
+func (e *FieldErrors) add(field, format string, args ...any) {
+	*e = append(*e, &FieldError{Field: field, Err: fmt.Errorf(format, args...)})
 }
 
 // validate makes sure that c can be rendered without producing a broken
 // nginx configuration. It reports every problem found, not just the first.
 func (c *Config) validate() error {
-	var p problems
+	var errs FieldErrors
 	for i, s := range c.Servers {
-		s.validate(&p, fmt.Sprintf("servers[%d]", i))
+		s.validate(&errs, fmt.Sprintf("servers[%d]", i))
 	}
-	return errors.Join(p...)
+	if len(errs) > 0 {
+		return errs
+	}
+	return nil
 }
 
-func (s Server) validate(p *problems, at string) {
+func (s Server) validate(p *FieldErrors, at string) {
 	names := strings.Fields(s.ServerName)
 	if len(names) == 0 {
 		p.add(at+".server_name", "is required")
@@ -225,7 +256,7 @@ func (s Server) validate(p *problems, at string) {
 	}
 }
 
-func (l Location) validate(p *problems, at string) {
+func (l Location) validate(p *FieldErrors, at string) {
 	switch {
 	case l.Path == "":
 		p.add(at+".path", "is required")
@@ -246,7 +277,7 @@ func (l Location) validate(p *problems, at string) {
 
 var directiveName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-func validateDirectives(p *problems, at string, ds []Directive) {
+func validateDirectives(p *FieldErrors, at string, ds []Directive) {
 	for i, d := range ds {
 		field := fmt.Sprintf("%s[%d]", at, i)
 		if !directiveName.MatchString(d.Name) {

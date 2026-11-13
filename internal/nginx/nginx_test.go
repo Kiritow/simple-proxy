@@ -113,6 +113,10 @@ servers:
 			if !errors.Is(err, nginx.ErrCertNotFound) {
 				t.Errorf("Generate error = %v, want ErrCertNotFound", err)
 			}
+			var fe *config.FieldError
+			if !errors.As(err, &fe) || fe.Field != "servers[0].cert_name" {
+				t.Errorf("Generate error = %v, want a FieldError for servers[0].cert_name", err)
+			}
 		})
 	}
 }

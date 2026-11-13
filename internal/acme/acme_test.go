@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -59,6 +60,25 @@ func TestLocateCert(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("LocateCert = %+v, want %+v", got, want)
+	}
+}
+
+func TestListCerts(t *testing.T) {
+	bin, _ := fakeAcme(t, listAndInfo)
+	got, err := acme.NewLocator(bin).ListCerts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"example.com", "*.example.org"}; !slices.Equal(got, want) {
+		t.Errorf("ListCerts = %q, want %q", got, want)
+	}
+}
+
+func TestListCertsEmpty(t *testing.T) {
+	bin, _ := fakeAcme(t, "echo 'Main_Domain|KeyLength|SAN_Domains|Profile|CA|Created|Renew'\n")
+	got, err := acme.NewLocator(bin).ListCerts(t.Context())
+	if err != nil || len(got) != 0 {
+		t.Errorf("ListCerts = %q, %v; want none", got, err)
 	}
 }
 

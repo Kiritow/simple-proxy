@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -206,5 +207,41 @@ servers:
 `))
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestParseFieldErrors(t *testing.T) {
+	_, err := config.Parse([]byte(`
+servers:
+- server_name: example.com
+  default: {port: 0}
+  locations:
+  - path: /api
+    port: 70000
+    options: ["add_header X a;b"]
+`))
+	var errs config.FieldErrors
+	if !errors.As(err, &errs) {
+		t.Fatalf("Parse error = %v, want FieldErrors", err)
+	}
+	var got []string
+	for _, fe := range errs {
+		got = append(got, fe.Field)
+	}
+	want := []string{
+		"servers[0].default.port",
+		"servers[0].locations[0].port",
+		"servers[0].locations[0].options[0]",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("fields = %q, want %q", got, want)
+	}
+}
+
+func TestParseSyntaxErrorIsNotFieldErrors(t *testing.T) {
+	_, err := config.Parse([]byte("servers: [unclosed"))
+	var errs config.FieldErrors
+	if err == nil || errors.As(err, &errs) {
+		t.Fatalf("Parse error = %v, want a plain YAML error", err)
 	}
 }
