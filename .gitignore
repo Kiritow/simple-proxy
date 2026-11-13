@@ -1,0 +1,12 @@
+# Binaries
+/simple-proxy
+/bin/
+/dist/
+/web/node_modules/
+
+# Local configuration and output
+/config.yaml
+/config.yml
+/proxy.conf
+
+# The UI build output in internal/web/dist is committed on purpose.

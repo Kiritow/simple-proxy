@@ -1,0 +1,34 @@
+{{- /* Rendered with confData. Directives are printed with directive.String. */ -}}
+# Auto generated at {{ .GeneratedAt.Format "2006-01-02 15:04:05" }}
+map $http_upgrade $connection_upgrade {
+  default upgrade;
+  "" close;
+}
+server {
+  listen 80 default_server;
+  server_name _;
+  return 444;
+}
+server {
+  listen 443 ssl default_server;
+  server_name _;
+  ssl_certificate {{ .FallbackCert }};
+  ssl_certificate_key {{ .FallbackKey }};
+  return 444;
+}
+{{- range .Servers }}
+server {
+  listen {{ .Listen }};
+  server_name {{ .Name }};
+  {{- range .Directives }}
+  {{ . }};
+  {{- end }}
+  {{- range .Locations }}
+  location {{ .Match }} {
+    {{- range .Directives }}
+    {{ . }};
+    {{- end }}
+  }
+  {{- end }}
+}
+{{- end }}

@@ -1,0 +1,32 @@
+# HTTPS servers exercising every option.
+servers:
+- server_name: www.example.com
+  cert_name: "*.example.com"
+  gzip: true
+  options:
+  - client_max_body_size 64m
+  default:
+    ip: 10.0.0.1
+    port: 3000
+    disable_cache: true
+    options:
+    - key: add_header
+      value: X-Example "value"
+  locations:
+  - path: /api
+    port: 3001
+    websocket: true
+    disable_cache: true
+    realtime: true
+    options:
+    - proxy_read_timeout 300s
+- server_name: alt.example.com
+  https: true
+  cert_name: "*.example.com"
+  listen_port: 8443
+  default:
+    enable: false
+  locations:
+  - path: /events
+    port: 4000
+    realtime: true
