@@ -245,3 +245,20 @@ func TestParseSyntaxErrorIsNotFieldErrors(t *testing.T) {
 		t.Fatalf("Parse error = %v, want a plain YAML error", err)
 	}
 }
+
+func TestDecodeServer(t *testing.T) {
+	// An incomplete draft decodes, since nothing is validated...
+	s, err := config.DecodeServer([]byte(`{"server_name": "", "default": {"port": 70000}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Default.Port != 70000 {
+		t.Errorf("Default.Port = %d, want 70000", s.Default.Port)
+	}
+	// ...but unknown fields and wrong types do not.
+	for _, bad := range []string{`{"websockets": true}`, `{"listen_port": "x"}`, ``} {
+		if _, err := config.DecodeServer([]byte(bad)); err == nil {
+			t.Errorf("DecodeServer(%q) succeeded, want an error", bad)
+		}
+	}
+}

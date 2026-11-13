@@ -10,6 +10,10 @@ generated `proxy.conf`. Problems are pointed out next to the inputs as you
 type. Existing `config.yaml` files can be imported, and the configuration can
 be exported as YAML again.
 
+Sites are saved as you edit them in an SQLite database, `sites.db`, in the
+directory of the executable. If two windows edit the sites at once, the one
+that saves second is asked to reload instead of overwriting the other.
+
 This is a Go rewrite of legacy-proxy-generator and accepts the same
 configuration files. Certificates are looked up with
 [acme.sh](https://github.com/acmesh-official/acme.sh).
@@ -28,6 +32,7 @@ is available. It also cross-compiles: `./build.sh linux/arm64` or
 | Flag             | Default                 | Description                                              |
 | ---------------- | ----------------------- | -------------------------------------------------------- |
 | `-addr`          | `127.0.0.1:8080`        | Address to serve HTTP on. There is no authentication, so keep it private. |
+| `-db`            | `sites.db` next to the executable | SQLite database storing the sites. Set it when using `go run`, whose executable is temporary. |
 | `-acme`          | `~/.acme.sh/acme.sh`    | The acme.sh script used to look up certificates.         |
 | `-fallback-cert` | `/certs/fallback.cer`   | Certificate presented to requests for unknown hosts.     |
 | `-fallback-key`  | `/certs/fallback.key`   | Private key of `-fallback-cert`.                         |
@@ -85,6 +90,12 @@ must be single directives: `;`, `{`, `}` and `#` have to be quoted or escaped.
 | `POST /api/validate`    | `204` if the configuration in the body is valid.                 |
 | `GET /api/certificates` | `{"certificates": [...]}`, the certificates acme.sh manages.     |
 | `GET /api/example`      | The example configuration.                                       |
+| `GET /api/sites`        | The stored sites, as `{"revision": 1, "sites": [{"id": "...", "config": {...}}]}`. |
+| `PUT /api/sites`        | Replace the stored sites; the body is like the response of `GET`. |
+
+Each stored `config` is one entry of `servers`, and may be an incomplete
+draft. A `PUT` carries the revision it is based on and fails with `409` if the
+sites were changed since then.
 
 Errors return `400` for invalid configuration, `422` for missing certificates
 and `500` (`503` for `/api/certificates`) if acme.sh fails. Responses are plain
@@ -103,6 +114,7 @@ main.go            flags and HTTP server
 internal/config    YAML schema, defaults and validation
 internal/nginx     configuration generator (nginx.conf.tmpl)
 internal/acme      certificate lookup through acme.sh
+internal/store     SQLite storage of the sites (modernc.org/sqlite, no cgo)
 internal/web       HTTP handlers, embeds the UI from internal/web/dist
 web/               UI: React, Tailwind CSS and shadcn/ui
 web/src/lib/model.ts  the UI's model and its conversion to and from YAML

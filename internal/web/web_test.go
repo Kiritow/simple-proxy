@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kiritow/simple-proxy/internal/nginx"
+	"github.com/kiritow/simple-proxy/internal/store"
 	"github.com/kiritow/simple-proxy/internal/web"
 )
 
@@ -34,9 +36,24 @@ const (
 	badConfig   = `{"servers": [{"server_name": "a;b", "default": {"port": 70000}}]}`
 )
 
-func newHandler(certs fakeCerts) http.Handler {
-	gen := &nginx.Generator{Certs: certs}
-	return web.NewHandler(gen, certs, []byte(example), slog.New(slog.DiscardHandler))
+func newHandler(t *testing.T, certs web.CertLister) http.Handler {
+	t.Helper()
+	sites, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "sites.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sites.Close() })
+	gen := &nginx.Generator{}
+	if c, ok := certs.(nginx.CertLocator); ok {
+		gen.Certs = c
+	}
+	return web.NewHandler(web.Options{
+		Generator: gen,
+		Sites:     sites,
+		Certs:     certs,
+		Example:   []byte(example),
+		Logger:    slog.New(slog.DiscardHandler),
+	})
 }
 
 type request struct {
@@ -57,7 +74,7 @@ func (req request) do(h http.Handler) (status int, contentType, body string) {
 }
 
 func TestHandler(t *testing.T) {
-	h := newHandler(fakeCerts{names: []string{"*.example.com"}})
+	h := newHandler(t, fakeCerts{names: []string{"*.example.com"}})
 
 	for _, tc := range []struct {
 		name       string
@@ -107,7 +124,7 @@ func TestHandler(t *testing.T) {
 }
 
 func TestCertificatesUnavailable(t *testing.T) {
-	h := newHandler(fakeCerts{err: errors.New("acme.sh: not found")})
+	h := newHandler(t, fakeCerts{err: errors.New("acme.sh: not found")})
 	status, _, body := request{"GET", "/api/certificates", "", true}.do(h)
 	if status != http.StatusServiceUnavailable || !strings.Contains(body, "acme.sh: not found") {
 		t.Errorf("got %d %s, want 503 with the error", status, body)
@@ -115,10 +132,43 @@ func TestCertificatesUnavailable(t *testing.T) {
 }
 
 func TestCertificatesNone(t *testing.T) {
-	gen := &nginx.Generator{}
-	h := web.NewHandler(gen, nil, nil, slog.New(slog.DiscardHandler))
+	h := newHandler(t, nil)
 	status, _, body := request{"GET", "/api/certificates", "", true}.do(h)
 	if status != http.StatusOK || strings.TrimSpace(body) != `{"certificates":[]}` {
 		t.Errorf("got %d %s, want an empty list", status, body)
+	}
+}
+
+func TestSites(t *testing.T) {
+	h := newHandler(t, nil)
+	get := request{"GET", "/api/sites", "", true}
+	put := func(body string) request { return request{"PUT", "/api/sites", body, true} }
+
+	steps := []struct {
+		name       string
+		req        request
+		wantStatus int
+		wantBody   string
+	}{
+		{"empty", get, http.StatusOK, `{"revision":0,"sites":[]}`},
+		{
+			"save a draft", put(`{"revision": 0, "sites": [{"id": "a1", "config": {"server_name": "", "default": {"port": 70000}}}]}`),
+			http.StatusOK, `{"revision":1}`,
+		},
+		{"load it", get, http.StatusOK, `{"revision":1,"sites":[{"id":"a1","config":{"server_name":"","default":{"port":70000}}}]}`},
+		{"stale revision", put(`{"revision": 0, "sites": []}`), http.StatusConflict, "changed by someone else"},
+		{"unknown field", put(`{"revision": 1, "sites": [{"id": "a1", "config": {"websockets": true}}]}`), http.StatusBadRequest, "sites[0]: config: "},
+		{"not an object", put(`{"revision": 1, "sites": [{"id": "a1", "config": []}]}`), http.StatusBadRequest, "config must be a JSON object"},
+		{"bad ID", put(`{"revision": 1, "sites": [{"id": "a/b", "config": {}}]}`), http.StatusBadRequest, `invalid ID \"a/b\"`},
+		{"duplicate ID", put(`{"revision": 1, "sites": [{"id": "a", "config": {}}, {"id": "a", "config": {}}]}`), http.StatusBadRequest, `sites[1]: duplicate ID \"a\"`},
+		{"unknown top-level field", put(`{"revision": 1, "site": []}`), http.StatusBadRequest, "unknown field"},
+		{"delete all", put(`{"revision": 1, "sites": []}`), http.StatusOK, `{"revision":2}`},
+		{"empty again", get, http.StatusOK, `{"revision":2,"sites":[]}`},
+	}
+	for _, step := range steps {
+		status, _, body := step.req.do(h)
+		if status != step.wantStatus || !strings.Contains(body, step.wantBody) {
+			t.Fatalf("%s: got %d %s; want %d containing %s", step.name, status, body, step.wantStatus, step.wantBody)
+		}
 	}
 }

@@ -8,5 +8,7 @@
 /config.yaml
 /config.yml
 /proxy.conf
+*.db
+*.db-journal
 
 # The UI build output in internal/web/dist is committed on purpose.

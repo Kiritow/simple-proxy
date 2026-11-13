@@ -5,6 +5,7 @@ import { test } from "node:test"
 import {
   certCovers,
   describeKey,
+  fromStored,
   ImportError,
   locate,
   newRoute,
@@ -14,6 +15,7 @@ import {
   routeKey,
   serialize,
   siteKey,
+  toStored,
   toYaml,
 } from "./model.ts"
 
@@ -184,4 +186,22 @@ test("certCovers matches exact and single-level wildcard names", () => {
   assert.ok(!certCovers("*.example.com", "example.com"))
   assert.ok(!certCovers("*.example.com", "a.b.example.com"))
   assert.ok(!certCovers("example.com", "www.example.com"))
+})
+
+test("stored sites keep their IDs and content", () => {
+  const sites = parseYaml(example)
+  const stored = toStored(sites)
+  assert.equal(stored[0].id, sites[0].id)
+  const loaded = fromStored(JSON.parse(JSON.stringify(stored)))
+  assert.equal(loaded[0].id, sites[0].id)
+  assert.deepEqual(toStored(loaded), stored)
+})
+
+test("stored drafts may be incomplete", () => {
+  const draft = newSite() // no domain, no port
+  draft.routes = [newRoute()]
+  const [loaded] = fromStored(toStored([draft]))
+  assert.equal(loaded.serverName, "")
+  assert.equal(loaded.root.port, "")
+  assert.equal(loaded.routes.length, 1)
 })

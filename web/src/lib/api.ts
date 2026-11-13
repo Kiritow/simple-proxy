@@ -1,6 +1,6 @@
 // Client for the HTTP API served by the Go server (internal/web).
 
-import type { ConfigJSON } from "@/lib/model"
+import type { ConfigJSON, StoredSite } from "@/lib/model"
 
 export type FieldProblem = { field: string; message: string }
 
@@ -76,6 +76,34 @@ export async function validateConfig(
     signal,
   })
   return res.ok ? null : readError(res)
+}
+
+export type StoredSites = { revision: number; sites: StoredSite[] }
+
+// ConflictError reports that the stored sites were changed by someone else.
+export class ConflictError extends Error {}
+
+export async function fetchSites(): Promise<StoredSites> {
+  const res = await fetch("api/sites", {
+    headers: { Accept: "application/json" },
+  })
+  if (!res.ok) throw new Error((await readError(res)).message)
+  return (await res.json()) as StoredSites
+}
+
+// saveSites stores sites in place of those of the given revision, and
+// returns the new revision.
+export async function saveSites(doc: StoredSites): Promise<number> {
+  const res = await fetch("api/sites", {
+    method: "PUT",
+    headers: json,
+    body: JSON.stringify(doc),
+  })
+  if (res.status === 409)
+    throw new ConflictError((await readError(res)).message)
+  if (!res.ok) throw new Error((await readError(res)).message)
+  const body = (await res.json()) as { revision: number }
+  return body.revision
 }
 
 export async function fetchCertificates(): Promise<string[]> {

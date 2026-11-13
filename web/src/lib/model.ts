@@ -129,7 +129,7 @@ type LocationJSON = {
   options?: string[]
 }
 
-type ServerJSON = {
+export type ServerJSON = {
   server_name: string
   enable?: false
   listen_port?: number
@@ -251,9 +251,7 @@ const locationFields = new Set([
   "options",
 ])
 
-// parseYaml converts a YAML (or JSON) configuration into sites. Like the
-// server, it rejects unknown fields; other problems are left for the server
-// to report once the sites are in the builder.
+// parseYaml converts a YAML (or JSON) configuration into sites.
 export function parseYaml(text: string): Site[] {
   let doc: unknown
   try {
@@ -262,7 +260,26 @@ export function parseYaml(text: string): Site[] {
     throw new ImportError([err instanceof Error ? err.message : String(err)])
   }
   if (doc == null) throw new ImportError(["the configuration is empty"])
+  return sitesFromConfig(doc)
+}
 
+// StoredSite is a site as stored on the server: one entry of servers.
+export type StoredSite = { id: string; config: ServerJSON }
+
+export function toStored(sites: Site[]): StoredSite[] {
+  const { config } = serialize(sites)
+  return sites.map((site, i) => ({ id: site.id, config: config.servers[i] }))
+}
+
+export function fromStored(stored: StoredSite[]): Site[] {
+  const sites = sitesFromConfig({ servers: stored.map((s) => s.config) })
+  return sites.map((site, i) => ({ ...site, id: stored[i].id }))
+}
+
+// sitesFromConfig converts a parsed configuration into sites. Like the
+// server, it rejects unknown fields; other problems are left for the server
+// to report once the sites are in the builder.
+function sitesFromConfig(doc: unknown): Site[] {
   const problems: string[] = []
   const mapping = (v: unknown, at: string, fields: Set<string>) => {
     if (v == null) return {}

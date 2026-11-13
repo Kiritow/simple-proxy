@@ -19,6 +19,7 @@ import (
 
 	"github.com/kiritow/simple-proxy/internal/acme"
 	"github.com/kiritow/simple-proxy/internal/nginx"
+	"github.com/kiritow/simple-proxy/internal/store"
 	"github.com/kiritow/simple-proxy/internal/web"
 )
 
@@ -39,12 +40,20 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	flags := flag.NewFlagSet("simple-proxy", flag.ExitOnError)
 	flags.SetOutput(stderr)
 	addr := flags.String("addr", "127.0.0.1:8080", "`address` to serve HTTP on")
+	dbPath := flags.String("db", defaultDBPath(), "`path` of the SQLite database storing the sites")
 	acmeBin := flags.String("acme", defaultAcmeBin(), "`path` of the acme.sh script used to look up certificates")
 	fallbackCert := flags.String("fallback-cert", nginx.DefaultFallbackCert, "`path` of the certificate presented to requests for unknown hosts")
 	fallbackKey := flags.String("fallback-key", nginx.DefaultFallbackKey, "`path` of the private key of -fallback-cert")
 	_ = flags.Parse(args) // ExitOnError: Parse exits instead of returning errors
 
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
+	sites, err := store.Open(ctx, *dbPath)
+	if err != nil {
+		return err
+	}
+	defer sites.Close()
+	logger.Info("opened database", "path", *dbPath)
+
 	locator := acme.NewLocator(*acmeBin)
 	gen := &nginx.Generator{
 		Certs:        locator,
@@ -52,7 +61,13 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		FallbackKey:  *fallbackKey,
 	}
 	srv := &http.Server{
-		Handler:           web.NewHandler(gen, locator, exampleConfig, logger),
+		Handler: web.NewHandler(web.Options{
+			Generator: gen,
+			Sites:     sites,
+			Certs:     locator,
+			Example:   exampleConfig,
+			Logger:    logger,
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
@@ -75,6 +90,19 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(ctx)
+}
+
+// defaultDBPath returns sites.db in the directory of the executable, so that
+// the data stays next to the program wherever it is started from.
+func defaultDBPath() string {
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		return "sites.db"
+	}
+	return filepath.Join(filepath.Dir(exe), "sites.db")
 }
 
 func defaultAcmeBin() string {

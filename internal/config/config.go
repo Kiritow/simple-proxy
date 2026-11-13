@@ -155,14 +155,8 @@ func (d *Directive) UnmarshalYAML(node *yaml.Node) error {
 // is a FieldErrors. In the returned Config, every Location has its Path and IP
 // set, and every enabled Location has a valid Port.
 func Parse(data []byte) (*Config, error) {
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-
 	var cfg Config
-	if err := dec.Decode(&cfg); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, errors.New("config is empty")
-		}
+	if err := decode(data, &cfg); err != nil {
 		return nil, err
 	}
 	cfg.applyDefaults()
@@ -170,6 +164,29 @@ func Parse(data []byte) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// DecodeServer decodes one entry of servers. Like Parse, it rejects unknown
+// fields, but it neither fills in defaults nor validates the server, so that
+// incomplete drafts can be stored.
+func DecodeServer(data []byte) (*Server, error) {
+	var s Server
+	if err := decode(data, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func decode(data []byte, v any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(v); err != nil {
+		if errors.Is(err, io.EOF) {
+			return errors.New("config is empty")
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *Config) applyDefaults() {

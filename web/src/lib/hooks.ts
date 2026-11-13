@@ -1,27 +1,175 @@
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react"
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react"
 
-import { fetchCertificates, validateConfig, type ApiError } from "@/lib/api"
-import { resolveField, serialize, type Site } from "@/lib/model"
+import {
+  ConflictError,
+  fetchCertificates,
+  fetchSites,
+  saveSites,
+  validateConfig,
+  type ApiError,
+} from "@/lib/api"
+import {
+  fromStored,
+  resolveField,
+  serialize,
+  toStored,
+  type Site,
+} from "@/lib/model"
 
-// usePersistentState is useState backed by localStorage.
-export function usePersistentState<T>(
-  key: string,
-  initial: () => T
-): [T, Dispatch<SetStateAction<T>>] {
-  const [value, setValue] = useState<T>(() => {
-    try {
-      const stored = localStorage.getItem(key)
-      if (stored !== null) return JSON.parse(stored) as T
-    } catch {
-      // Corrupt or from an incompatible version: start over.
+export type SaveState = "saved" | "pending" | "saving" | "failed" | "conflict"
+
+export type SiteStore = {
+  sites: Site[] | null // null until loaded
+  loadError: string | null
+  setSites: Dispatch<SetStateAction<Site[]>>
+  save: SaveState
+  saveError: string
+  retrySave: () => void
+  reload: () => void
+}
+
+// Earlier versions kept the sites in the browser, under this key.
+const legacyKey = "simple-proxy:sites:v1"
+
+function legacySites(): Site[] | null {
+  try {
+    const sites = JSON.parse(
+      localStorage.getItem(legacyKey) ?? "null"
+    ) as unknown
+    return Array.isArray(sites) && sites.length > 0 ? (sites as Site[]) : null
+  } catch {
+    return null
+  }
+}
+
+// useSiteStore loads the sites from the server, and saves them shortly after
+// every change.
+export function useSiteStore(): SiteStore {
+  const [sites, setSitesState] = useState<Site[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [save, setSave] = useState<SaveState>("saved")
+  const [saveError, setSaveError] = useState("")
+  const [loads, setLoads] = useState(0) // incremented to reload
+
+  const revision = useRef(0) // of the sites on the server
+  const savedJSON = useRef("") // the sites on the server, as sent
+  const latest = useRef<Site[] | null>(null)
+  const saving = useRef(false)
+  const stopped = useRef(false) // after a conflict, until reloaded
+
+  useEffect(() => {
+    let active = true
+    fetchSites().then(
+      (doc) => {
+        if (!active) return
+        let loaded = fromStored(doc.sites)
+        revision.current = doc.revision
+        savedJSON.current = JSON.stringify(toStored(loaded))
+        stopped.current = false
+        // Move the sites of an earlier version into a database never saved to.
+        const legacy =
+          doc.revision === 0 && loaded.length === 0 ? legacySites() : null
+        if (legacy) loaded = legacy
+        latest.current = loaded
+        setSitesState(loaded)
+        setSave(legacy ? "pending" : "saved")
+        setLoadError(null)
+      },
+      (err: unknown) => {
+        if (active)
+          setLoadError(err instanceof Error ? err.message : String(err))
+      }
+    )
+    return () => {
+      active = false
     }
-    return initial()
-  })
-  useEffect(
-    () => localStorage.setItem(key, JSON.stringify(value)),
-    [key, value]
-  )
-  return [value, setValue]
+  }, [loads])
+
+  // flush saves the latest sites until the server has them all.
+  const flush = useCallback(async () => {
+    if (saving.current) return // the running flush saves the latest sites
+    saving.current = true
+    try {
+      for (;;) {
+        if (stopped.current || latest.current === null) return
+        const body = toStored(latest.current)
+        const json = JSON.stringify(body)
+        if (json === savedJSON.current) {
+          setSave("saved")
+          return
+        }
+        setSave("saving")
+        try {
+          revision.current = await saveSites({
+            revision: revision.current,
+            sites: body,
+          })
+        } catch (err) {
+          if (err instanceof ConflictError) {
+            stopped.current = true
+            setSave("conflict")
+          } else {
+            setSave("failed")
+            setSaveError(err instanceof Error ? err.message : String(err))
+          }
+          return
+        }
+        savedJSON.current = json
+        localStorage.removeItem(legacyKey)
+      }
+    } finally {
+      saving.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    latest.current = sites
+    if (sites === null) return
+    const timer = setTimeout(() => void flush(), 600)
+    return () => clearTimeout(timer)
+  }, [sites, flush])
+
+  // Warn before leaving the page with changes that are not saved.
+  useEffect(() => {
+    if (save === "saved") return
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+    window.addEventListener("beforeunload", warn)
+    return () => window.removeEventListener("beforeunload", warn)
+  }, [save])
+
+  const setSites = useCallback<Dispatch<SetStateAction<Site[]>>>((action) => {
+    setSitesState((prev) =>
+      prev === null
+        ? prev
+        : typeof action === "function"
+          ? action(prev)
+          : action
+    )
+    setSave((s) => (s === "conflict" ? s : "pending"))
+  }, [])
+
+  const reload = useCallback(() => {
+    setSitesState(null)
+    setLoadError(null)
+    setLoads((n) => n + 1)
+  }, [])
+
+  return {
+    sites,
+    loadError,
+    setSites,
+    save,
+    saveError,
+    retrySave: () => void flush(),
+    reload,
+  }
 }
 
 export type Certificates =
