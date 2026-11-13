@@ -22,15 +22,24 @@ else
 	targets=("$@")
 fi
 
-# The UI in web/ is built by Vite into internal/web/dist, which the binary embeds. That directory is committed so
-# Go alone can build, but rebuild it when npm is available, so it always matches web/.
-if command -v npm >/dev/null; then
-	[[ -d web/node_modules ]] || npm --prefix web ci --no-fund --no-audit
-	npm --prefix web run --silent build -- --logLevel warn
-else
-	echo "npm not found: using the committed internal/web/dist" >&2
-fi
+UI=internal/web/dist
 
+# The UI in web/ is built by Vite into $UI, which the binary embeds. That directory is committed so Go alone can
+# build, but rebuild it when npm is available, so it always matches web/.
+echo "==> Web UI: web/ -> $UI"
+if command -v npm >/dev/null; then
+	echo "node $(node --version), npm $(npm --version)"
+	[[ -d web/node_modules ]] || npm --prefix web ci --no-fund --no-audit
+	# Vite reports every file it writes, with its size and gzipped size.
+	npm --prefix web run --silent build
+else
+	echo "npm not found: using the committed $UI:" >&2
+	find "$UI" -type f -exec du -h {} + | sort -k2
+fi
+echo "Embedded UI: $(du -sh "$UI" | cut -f1) in $(find "$UI" -type f | wc -l | tr -d ' ') files"
+
+echo
+echo "==> Go binaries: $(go version | cut -d' ' -f3)"
 mkdir -p "$OUT"
 
 for target in "${targets[@]}"; do
