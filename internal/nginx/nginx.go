@@ -50,6 +50,10 @@ type Generator struct {
 	// by the catch-all server that rejects requests for unknown hosts.
 	// They default to DefaultFallbackCert and DefaultFallbackKey.
 	FallbackCert, FallbackKey string
+	// ACMEWebroot, if set, is served at /.well-known/acme-challenge/ on port
+	// 80, for every domain, so that acme.sh can obtain certificates with
+	// HTTP-01 validation using --webroot.
+	ACMEWebroot string
 	// Now returns the generation time written in the output. It defaults to
 	// time.Now.
 	Now func() time.Time
@@ -77,10 +81,11 @@ func (g *Generator) Generate(ctx context.Context, cfg *config.Config) ([]byte, e
 
 	var buf bytes.Buffer
 	err = confTemplate.Execute(&buf, confData{
-		GeneratedAt:  now(),
-		FallbackCert: quote(cmp.Or(g.FallbackCert, DefaultFallbackCert)),
-		FallbackKey:  quote(cmp.Or(g.FallbackKey, DefaultFallbackKey)),
-		Servers:      servers,
+		GeneratedAt:   now(),
+		FallbackCert:  quote(cmp.Or(g.FallbackCert, DefaultFallbackCert)),
+		FallbackKey:   quote(cmp.Or(g.FallbackKey, DefaultFallbackKey)),
+		ACMEChallenge: g.acmeChallenge(),
+		Servers:       servers,
 	})
 	if err != nil {
 		return nil, err
@@ -89,10 +94,11 @@ func (g *Generator) Generate(ctx context.Context, cfg *config.Config) ([]byte, e
 }
 
 type confData struct {
-	GeneratedAt  time.Time
-	FallbackCert string
-	FallbackKey  string
-	Servers      []server
+	GeneratedAt   time.Time
+	FallbackCert  string
+	FallbackKey   string
+	ACMEChallenge *location // nil without ACMEWebroot
+	Servers       []server
 }
 
 type server struct {
@@ -154,8 +160,11 @@ func (g *Generator) servers(ctx context.Context, cfg *config.Config) ([]server, 
 			}
 		}
 
+		if acme := g.acmeChallenge(); acme != nil && !s.UseHTTPS() && s.Port() == 80 {
+			srv.Locations = append([]location{*acme}, srv.Locations...)
+		}
 		if s.UseHTTPS() {
-			out = append(out, httpsRedirect(s))
+			out = append(out, g.httpsRedirect(s))
 		}
 		out = append(out, srv)
 	}
@@ -169,17 +178,34 @@ func (g *Generator) locateCert(ctx context.Context, name string) (Certificate, e
 	return g.Certs.LocateCert(ctx, name)
 }
 
+// acmeChallenge returns the location answering ACME HTTP-01 challenges, or
+// nil without ACMEWebroot.
+func (g *Generator) acmeChallenge() *location {
+	if g.ACMEWebroot == "" {
+		return nil
+	}
+	return &location{
+		Match:      "^~ /.well-known/acme-challenge/",
+		Directives: []directive{{"root", quote(g.ACMEWebroot)}},
+	}
+}
+
 // httpsRedirect returns a plain HTTP server redirecting to HTTPS server s.
-func httpsRedirect(s config.Server) server {
+func (g *Generator) httpsRedirect(s config.Server) server {
 	target := "https://$host$request_uri"
 	if port := s.Port(); port != 443 {
 		target = fmt.Sprintf("https://$host:%d$request_uri", port)
 	}
-	return server{
-		Listen:     "80",
-		Name:       s.ServerName,
-		Directives: []directive{{"return", "301 " + target}},
+	redirect := directive{"return", "301 " + target}
+	srv := server{Listen: "80", Name: s.ServerName}
+	acme := g.acmeChallenge()
+	if acme == nil {
+		srv.Directives = []directive{redirect}
+		return srv
 	}
+	// A return at the server level would also redirect the challenges.
+	srv.Locations = []location{*acme, {Match: "/", Directives: []directive{redirect}}}
+	return srv
 }
 
 func proxyLocation(l config.Location) location {

@@ -7,7 +7,18 @@ map $http_upgrade $connection_upgrade {
 server {
   listen 80 default_server;
   server_name _;
+  {{- with .ACMEChallenge }}
+  location {{ .Match }} {
+    {{- range .Directives }}
+    {{ . }};
+    {{- end }}
+  }
+  location / {
+    return 444;
+  }
+  {{- else }}
   return 444;
+  {{- end }}
 }
 server {
   listen 443 ssl default_server;

@@ -5,22 +5,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
 )
 
-// ErrConflict is returned by ReplaceSites if the sites were changed after
-// the revision that the caller started from.
-var ErrConflict = errors.New("the sites were changed by someone else")
-
 // Site is a stored site.
 type Site struct {
 	ID string `json:"id"`
 	// Config is the site as one entry of servers in the configuration
-	// schema, in JSON. It may be an incomplete draft.
+	// schema, in JSON.
 	Config json.RawMessage `json:"config"`
 }
 
@@ -68,6 +63,10 @@ var migrations = [][]string{
 		) STRICT`,
 		`INSERT INTO revision (id, value) VALUES (1, 0)`,
 	},
+	{
+		// Sites are changed one at a time now, so revisions are not needed.
+		`DROP TABLE revision`,
+	},
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -101,21 +100,11 @@ func (s *Store) migrate(ctx context.Context) error {
 	return tx.Commit()
 }
 
-// Sites returns the stored sites in order, and the current revision.
-func (s *Store) Sites(ctx context.Context) ([]Site, int64, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+// Sites returns the stored sites in order.
+func (s *Store) Sites(ctx context.Context) ([]Site, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id, config FROM sites ORDER BY position")
 	if err != nil {
-		return nil, 0, err
-	}
-	defer tx.Rollback()
-
-	var revision int64
-	if err := tx.QueryRowContext(ctx, "SELECT value FROM revision").Scan(&revision); err != nil {
-		return nil, 0, err
-	}
-	rows, err := tx.QueryContext(ctx, "SELECT id, config FROM sites ORDER BY position")
-	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -123,46 +112,36 @@ func (s *Store) Sites(ctx context.Context) ([]Site, int64, error) {
 	for rows.Next() {
 		var id, config string
 		if err := rows.Scan(&id, &config); err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		sites = append(sites, Site{ID: id, Config: json.RawMessage(config)})
 	}
-	return sites, revision, rows.Err()
+	return sites, rows.Err()
 }
 
-// ReplaceSites stores sites, in this order, in place of the current ones and
-// returns the new revision. If the sites were changed after revision,
-// ReplaceSites returns ErrConflict and changes nothing.
-func (s *Store) ReplaceSites(ctx context.Context, sites []Site, revision int64) (int64, error) {
+// ReplaceSites stores sites, in this order, in place of the current ones.
+// Sites keep their creation time, and their update time unless their
+// configuration changed.
+func (s *Store) ReplaceSites(ctx context.Context, sites []Site) error {
 	ids := make([]string, len(sites))
 	seen := make(map[string]bool, len(sites))
 	for i, site := range sites {
 		if seen[site.ID] {
-			return 0, fmt.Errorf("duplicate site ID %q", site.ID)
+			return fmt.Errorf("duplicate site ID %q", site.ID)
 		}
 		seen[site.ID] = true
 		ids[i] = site.ID
 	}
 	idList, err := json.Marshal(ids)
 	if err != nil {
-		return 0, err
+		return err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer tx.Rollback()
-
-	res, err := tx.ExecContext(ctx, "UPDATE revision SET value = value + 1 WHERE value = ?", revision)
-	if err != nil {
-		return 0, err
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return 0, err
-	} else if n == 0 {
-		return 0, ErrConflict
-	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	for i, site := range sites {
@@ -177,16 +156,12 @@ func (s *Store) ReplaceSites(ctx context.Context, sites []Site, revision int64) 
 				updated_at = iif(config = excluded.config, updated_at, excluded.updated_at)`,
 			site.ID, i, string(site.Config), now)
 		if err != nil {
-			return 0, fmt.Errorf("storing site %q: %w", site.ID, err)
+			return fmt.Errorf("storing site %q: %w", site.ID, err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM sites WHERE id NOT IN (SELECT value FROM json_each(?))", string(idList)); err != nil {
-		return 0, err
+		return err
 	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	return revision + 1, nil
+	return tx.Commit()
 }

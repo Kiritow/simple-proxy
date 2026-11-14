@@ -64,25 +64,6 @@ export function newSite(): Site {
   }
 }
 
-const cloneDirectives = (ds: Directive[]) =>
-  ds.map((d) => ({ ...d, id: newId() }))
-
-const cloneRoute = (r: Route): Route => ({
-  ...r,
-  id: newId(),
-  options: cloneDirectives(r.options),
-})
-
-export function cloneSite(s: Site): Site {
-  return {
-    ...s,
-    id: newId(),
-    options: cloneDirectives(s.options),
-    root: cloneRoute(s.root),
-    routes: s.routes.map(cloneRoute),
-  }
-}
-
 export const domainsOf = (s: Site) => s.serverName.split(/\s+/).filter(Boolean)
 
 // certificateOf returns the name of the certificate served by s.
@@ -97,6 +78,12 @@ export function certCovers(cert: string, domain: string): boolean {
   return domain.endsWith(suffix) && label !== "" && !label.includes(".")
 }
 
+// uncovered returns the domains that none of certDomains, the names a
+// certificate is valid for, covers.
+export function uncovered(domains: string[], certDomains: string[]): string[] {
+  return domains.filter((d) => !certDomains.some((c) => certCovers(c, d)))
+}
+
 // Keys identify the inputs of sites, routes and directives, so that problems
 // reported by the server can be shown next to them. A field's key is the key
 // of its owner followed by the field's name in the schema, e.g. ".port".
@@ -105,16 +92,6 @@ export const siteKey = (s: Site) => `s:${s.id}`
 export const routeKey = (s: Site, r: Route) => `${siteKey(s)}/r:${r.id}`
 export const directiveKey = (owner: string, d: Directive) =>
   `${owner}/d:${d.id}`
-
-export type StepId = "sites" | "routes" | "preview"
-
-// locate returns the step and the site that the input with the given key is on.
-export function locate(key: string): { step: StepId; siteId: string } {
-  return {
-    step: key.includes("/r:") ? "routes" : "sites",
-    siteId: /^s:([^/.]+)/.exec(key)?.[1] ?? "",
-  }
-}
 
 // The JSON form of the configuration schema.
 
@@ -276,17 +253,17 @@ export function parseYaml(text: string): Site[] {
   return sitesFromConfig(doc)
 }
 
-// StoredSite is a site as stored on the server: one entry of servers.
-export type StoredSite = { id: string; config: ServerJSON }
+// A site as stored on the server: one entry of servers.
+type Stored = { id: string; config: ServerJSON }
 
-export function toStored(sites: Site[]): StoredSite[] {
-  const { config } = serialize(sites)
-  return sites.map((site, i) => ({ id: site.id, config: config.servers[i] }))
+// toServer converts site into one entry of servers.
+export function toServer(site: Site): ServerJSON {
+  return serialize([site]).config.servers[0]
 }
 
-export function fromStored(stored: StoredSite[]): Site[] {
-  const sites = sitesFromConfig({ servers: stored.map((s) => s.config) })
-  return sites.map((site, i) => ({ ...site, id: stored[i].id }))
+export function fromStored(stored: Stored): Site {
+  const [site] = sitesFromConfig({ servers: [stored.config] })
+  return { ...site, id: stored.id }
 }
 
 // sitesFromConfig converts a parsed configuration into sites. Like the
@@ -376,38 +353,4 @@ function compact<T extends object>(o: T): T {
   return Object.fromEntries(
     Object.entries(o).filter(([, v]) => v !== undefined)
   ) as T
-}
-
-// KeyLabels name the parts of the builder, for describeKey.
-export type KeyLabels = {
-  newSite: string
-  defaultRoute: string
-  newRoute: string
-  directive: string
-  fields: Record<string, string> // by name in the schema, such as "port"
-}
-
-// describeKey describes where the input with the given key is, such as
-// "example.com › /api › Port".
-export function describeKey(
-  sites: Site[],
-  key: string,
-  labels: KeyLabels
-): string {
-  const m = /^s:([^/.]+)(?:\/r:([^/.]+))?(?:\/d:([^/.]+))?(?:\.(\w+))?$/.exec(
-    key
-  )
-  if (!m) return key
-  const [, siteId, routeId, directiveId, field] = m
-  const site = sites.find((s) => s.id === siteId)
-  const parts = [(site && domainsOf(site)[0]) || labels.newSite]
-  if (routeId && site) {
-    const route = [site.root, ...site.routes].find((r) => r.id === routeId)
-    parts.push(
-      route === site.root ? labels.defaultRoute : route?.path || labels.newRoute
-    )
-  }
-  if (directiveId) parts.push(labels.directive)
-  else if (field) parts.push(labels.fields[field] ?? field)
-  return parts.join(" › ")
 }

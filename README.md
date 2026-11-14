@@ -1,58 +1,98 @@
 # Simple Proxy
 
-Build nginx reverse proxy configuration (the `http` context part) in a web
-UI, or generate it from a simple YAML file over HTTP.
+A web console that manages nginx as a reverse proxy, in the spirit of
+Nginx Proxy Manager. Add a site (its domains and the upstream service to
+forward them to), and saving applies it to nginx right away.
 
-The UI guides you through three steps: **Sites** (domains, HTTPS with a
-certificate picked from acme.sh, gzip), **Routes** (path prefixes and their
-upstreams, WebSocket, buffering and caching) and **Preview**, which shows the
-generated `proxy.conf`. Problems are pointed out next to the inputs as you
-type. Existing `config.yaml` files can be imported, and the configuration can
-be exported as YAML again.
+- **Sites:** domains, upstream host and port, extra routes for path
+  prefixes, WebSocket, buffering, caching, gzip and raw nginx directives.
+- **HTTPS:** pick a certificate managed by acme.sh, or request a new one from
+  the UI (HTTP-01 through nginx, or DNS-01 with an acme.sh DNS API). acme.sh
+  renews certificates and reloads nginx.
+- **Safe changes:** every change is tested with `nginx -t` before nginx
+  reloads. If nginx rejects it, nothing changes, and the UI shows nginx's
+  output. Problems such as invalid ports or domains used by another site are
+  shown next to the inputs.
+- **Import/export:** `config.yaml` files of legacy-proxy-generator can be
+  imported, and the sites exported in the same format.
+- English and Chinese, following the browser's language.
 
-The UI is available in English and Chinese. It follows the browser's
-preferred languages and falls back to English; the language can also be
-chosen in the header.
-
-Sites are saved as you edit them in an SQLite database, `sites.db`, in the
-directory of the executable. If two windows edit the sites at once, the one
-that saves second is asked to reload instead of overwriting the other.
-
-This is a Go rewrite of legacy-proxy-generator and accepts the same
-configuration files. Certificates are looked up with
-[acme.sh](https://github.com/acmesh-official/acme.sh).
+Sites are stored in an SQLite database, `sites.db`, in the directory of the
+executable. The console has no login, so it listens on 127.0.0.1 by default;
+reach it through an SSH tunnel or a VPN.
 
 ## Run
 
 ```bash
 ./build.sh                          # builds dist/simple-proxy-<os>-<arch>
-dist/simple-proxy-linux-amd64       # serves http://127.0.0.1:8080
+dist/simple-proxy-linux-amd64 -nginx-conf /etc/nginx/conf.d/simple-proxy.conf \
+  -acme-webroot /var/www/acme      # serves http://127.0.0.1:8080
 ```
 
 `build.sh` builds static, stripped binaries, rebuilding the UI first when npm
 is available. It also cross-compiles: `./build.sh linux/arm64` or
 `./build.sh all`. Plain `go build .` works too.
 
-| Flag             | Default                 | Description                                              |
-| ---------------- | ----------------------- | -------------------------------------------------------- |
-| `-addr`          | `127.0.0.1:8080`        | Address to serve HTTP on. There is no authentication, so keep it private. |
+| Flag             | Default                 | Description |
+| ---------------- | ----------------------- | ----------- |
+| `-addr`          | `127.0.0.1:8080`        | Address to serve the console on. |
 | `-db`            | `sites.db` next to the executable | SQLite database storing the sites. Set it when using `go run`, whose executable is temporary. |
-| `-acme`          | `~/.acme.sh/acme.sh`    | The acme.sh script used to look up certificates.         |
-| `-fallback-cert` | `/certs/fallback.cer`   | Certificate presented to requests for unknown hosts.     |
-| `-fallback-key`  | `/certs/fallback.key`   | Private key of `-fallback-cert`.                         |
+| `-nginx-conf`    | none                    | The configuration file to manage, which nginx must include in its `http` block. Without it, sites are only stored. |
+| `-nginx-test`    | `nginx -t`              | Command testing nginx's configuration. |
+| `-nginx-reload`  | `nginx -s reload`       | Command reloading nginx; acme.sh also runs it after renewing certificates. |
+| `-acme`          | `~/.acme.sh/acme.sh`    | The acme.sh script. Without it, HTTPS is unavailable. |
+| `-acme-webroot`  | none                    | Directory that nginx serves at `/.well-known/acme-challenge/` on port 80, to request certificates over HTTP. Without it, only DNS validation is available. |
+| `-fallback-cert` | `/certs/fallback.cer`   | Certificate presented to HTTPS requests for unknown hosts. |
+| `-fallback-key`  | `/certs/fallback.key`   | Private key of `-fallback-cert`. |
 
-The generated configuration always contains catch-all servers that reject
-requests for unknown hosts on ports 80 and 443. The latter needs a certificate,
-e.g. a self-signed one:
+Commands are split at spaces and run without a shell; use a script for
+anything more complex.
+
+### How changes are applied
+
+On every change, and once on startup, the configuration of all enabled sites
+is written to `-nginx-conf`, tested with `-nginx-test`, and loaded with
+`-nginx-reload`. If the test or the reload fails, the previous file is
+restored, so the file always holds a configuration nginx accepted. The header
+shows whether nginx runs the stored sites; its dialog shows the commands, the
+last error and the generated configuration, and can apply the sites again,
+e.g. after nginx restarted.
+
+The configuration always contains catch-all servers that reject requests for
+unknown hosts on ports 80 and 443. The latter needs a certificate, e.g. a
+self-signed one:
 
 ```bash
 openssl req -x509 -newkey rsa:4096 -nodes -days 3650 -subj "/CN=example.com" \
   -keyout fallback.key -out fallback.cer
 ```
 
-## Configuration
+### nginx in a container
 
-See [config.yaml.example](config.yaml.example). JSON is accepted too.
+The configuration refers to certificates where acme.sh keeps them, and to
+`-acme-webroot`, so mount those into the container at the same paths. The
+file is rewritten in place, so it may be mounted on its own as well as with
+its directory.
+
+```bash
+podman run -d --name nginx --network host \
+  -v /srv/proxy/conf.d:/etc/nginx/conf.d \
+  -v /srv/proxy/certs:/certs:ro \
+  -v $HOME/.acme.sh:$HOME/.acme.sh:ro \
+  -v /var/www/acme:/var/www/acme:ro \
+  docker.io/nginx:latest
+
+simple-proxy -nginx-conf /srv/proxy/conf.d/proxy.conf \
+  -nginx-test "podman exec nginx nginx -t" \
+  -nginx-reload "podman exec nginx nginx -s reload" \
+  -acme-webroot /var/www/acme
+```
+
+## Configuration format
+
+Sites use the format of legacy-proxy-generator's `config.yaml`, which the
+console imports and exports. See [config.yaml.example](config.yaml.example);
+JSON is accepted too.
 
 ```yaml
 servers:
@@ -82,32 +122,40 @@ servers:
 ```
 
 HTTPS servers get a companion server on port 80 that redirects to HTTPS.
-
 Unknown fields are rejected, and all problems are reported at once. Options
 must be single directives: `;`, `{`, `}` and `#` have to be quoted or escaped.
 
 ## HTTP API
 
-| Request                 | Response                                                         |
-| ----------------------- | ---------------------------------------------------------------- |
-| `POST /api/generate`    | The nginx configuration generated from the YAML or JSON body.   |
-| `POST /api/validate`    | `204` if the configuration in the body is valid.                 |
-| `GET /api/certificates` | `{"certificates": [...]}`, the certificates acme.sh manages.     |
-| `GET /api/example`      | The example configuration.                                       |
-| `GET /api/sites`        | The stored sites, as `{"revision": 1, "sites": [{"id": "...", "config": {...}}]}`. |
-| `PUT /api/sites`        | Replace the stored sites; the body is like the response of `GET`. |
+The console is built on this API, which scripts can use as well. A site's
+`config` is one entry of `servers` above, in JSON.
 
-Each stored `config` is one entry of `servers`, and may be an incomplete
-draft. A `PUT` carries the revision it is based on and fails with `409` if the
-sites were changed since then.
+| Request                   | Response |
+| ------------------------- | -------- |
+| `GET /api/sites`          | `{"sites": [{"id": "...", "config": {...}}]}` |
+| `POST /api/sites`         | Add a site: `{"config": {...}}`. |
+| `PUT /api/sites/{id}`     | Change a site: `{"config": {...}}`. |
+| `DELETE /api/sites/{id}`  | Remove a site. |
+| `PUT /api/sites`          | Replace all sites: `{"configs": [{...}]}`. |
+| `GET /api/status`         | How sites are applied to nginx, and the last error. |
+| `POST /api/apply`         | Apply the stored sites again. |
+| `GET /api/nginx.conf`     | The configuration generated from the sites. |
+| `GET /api/certificates`   | The certificates acme.sh manages. |
+| `POST /api/certificates`  | Request one: `{"domains": ["example.com"], "dns": "dns_cf"}`; without `dns`, over HTTP. |
+| `POST /api/generate`      | The configuration generated from a YAML or JSON configuration, without storing anything. |
+| `POST /api/validate`      | `204` if the configuration in the body is valid. |
 
-Errors return `400` for invalid configuration, `422` for missing certificates
-and `500` (`503` for `/api/certificates`) if acme.sh fails. Responses are plain
-text, unless the request has `Accept: application/json`: then `generate`
-returns `{"config": "..."}`, and errors list the invalid fields as in
-`{"message": "...", "fields": [{"field": "servers[0].default.port", "message": "70000 is not a valid port", "code": "invalid_port", "value": "70000"}]}`.
+Changes respond `400` for invalid sites, `422` for missing certificates, and
+`502` with nginx's output if nginx rejects the configuration. Errors are JSON:
+
+```json
+{"message": "...", "output": "nginx: [emerg] ...",
+ "fields": [{"field": "servers[0].default.port", "message": "70000 is not a valid port", "code": "invalid_port", "value": "70000"}]}
+```
+
 The `code` (see `config.ProblemCode`, plus `cert_not_found`) lets clients
-describe a problem in their own words, as the UI does in Chinese.
+describe a problem in their own words, as the UI does in Chinese. `generate`
+and `validate` answer in plain text unless asked for JSON:
 
 ```bash
 curl --data-binary @config.yaml http://127.0.0.1:8080/api/generate > proxy.conf
@@ -116,14 +164,15 @@ curl --data-binary @config.yaml http://127.0.0.1:8080/api/generate > proxy.conf
 ## Development
 
 ```
-main.go            flags and HTTP server
-internal/config    YAML schema, defaults and validation
+main.go            flags and wiring
+internal/config    configuration format, defaults and validation
 internal/nginx     configuration generator (nginx.conf.tmpl)
-internal/acme      certificate lookup through acme.sh
+internal/apply     writes, tests and reloads nginx's configuration
+internal/acme      certificates through acme.sh
 internal/store     SQLite storage of the sites (modernc.org/sqlite, no cgo)
-internal/web       HTTP handlers, embeds the UI from internal/web/dist
+internal/manager   site changes: check, apply, then store
+internal/web       HTTP API, embeds the UI from internal/web/dist
 web/               UI: React, Tailwind CSS and shadcn/ui
-web/src/lib/model.ts  the UI's model and its conversion to and from YAML
 web/src/lib/i18n/  the UI's messages in English (en.ts) and Chinese (zh.ts)
 ```
 
@@ -154,6 +203,5 @@ Run `go test ./...` and `npm --prefix web test` for the tests, and
   example did, besides the `{key, value}` form.
 - Location `port` may be omitted to use the default location's port.
 - IPv6 upstreams are bracketed in `proxy_pass`.
-- Certificates are referenced in place rather than copied (`--copy-cert`).
-  Mount the acme.sh directory into the nginx container at the same path, or
-  keep using the legacy copy step.
+- Certificates are referenced where acme.sh keeps them rather than copied
+  (`--copy-cert`); mount them into an nginx container at the same paths.

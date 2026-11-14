@@ -12,70 +12,71 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 
+	"github.com/kiritow/simple-proxy/internal/acme"
+	"github.com/kiritow/simple-proxy/internal/apply"
 	"github.com/kiritow/simple-proxy/internal/config"
+	"github.com/kiritow/simple-proxy/internal/manager"
 	"github.com/kiritow/simple-proxy/internal/nginx"
 	"github.com/kiritow/simple-proxy/internal/store"
 )
 
-// MaxConfigSize is the size limit of submitted configurations, in bytes.
+// MaxConfigSize is the size limit of request bodies, in bytes.
 const MaxConfigSize = 1 << 20
 
 //go:embed dist
 var dist embed.FS
 
-// CertLister lists the names of the certificates available to HTTPS servers.
-type CertLister interface {
-	ListCerts(ctx context.Context) ([]string, error)
-}
-
 // Options configure the handler returned by NewHandler.
 type Options struct {
+	Manager *manager.Manager
+	// Generator generates configuration for /api/generate, which does not
+	// involve the stored sites.
 	Generator *nginx.Generator
-	Sites     *store.Store
-	Certs     CertLister // nil if no certificates are available
-	Example   []byte     // the example configuration
+	Example   []byte // the example configuration
 	Logger    *slog.Logger
 }
 
-// NewHandler returns a handler serving
+// NewHandler returns a handler serving the browser UI at / and this API:
 //
-//	GET  /                  the browser UI
-//	GET  /api/sites         the stored sites and their revision (JSON)
-//	PUT  /api/sites         replace the stored sites (JSON)
-//	GET  /api/example       the example configuration (YAML)
-//	GET  /api/certificates  the certificate names listed by Certs (JSON)
-//	POST /api/validate      204 if the configuration in the body is valid
-//	POST /api/generate      the nginx configuration generated from the body
+//	GET    /api/sites         the sites: {"sites": [{"id": "...", "config": {...}}]}
+//	POST   /api/sites         add a site: {"config": {...}}
+//	PUT    /api/sites         replace all sites: {"configs": [{...}]}
+//	PUT    /api/sites/{id}    change a site: {"config": {...}}
+//	DELETE /api/sites/{id}    remove a site
+//	GET    /api/status        how configuration is applied to nginx
+//	POST   /api/apply         apply the stored sites again
+//	GET    /api/nginx.conf    the configuration generated from the sites
+//	GET    /api/certificates  the certificates managed by acme.sh
+//	POST   /api/certificates  issue one: {"domains": ["..."], "dns": "dns_cf"}
+//	POST   /api/validate      204 if the configuration in the body is valid
+//	POST   /api/generate      the configuration generated from the body
+//	GET    /api/example       an example configuration
 //
-// Configurations are YAML or JSON. Responses of validate and generate are
-// plain text, unless the request accepts application/json: then generate
-// answers {"config": "..."}, and errors are reported as
+// A site's config is one entry of servers in the configuration schema, in
+// JSON. Changing sites applies them to nginx; if nginx rejects the result,
+// nothing changes and the response is 502 with nginx's output.
 //
-//	{"message": "...", "fields": [{"field": "servers[0].default.port", "message": "...", "code": "invalid_port", "value": "70000"}]}
+// Errors are reported as
+//
+//	{"message": "...", "fields": [{"field": "servers[0].default.port", "message": "...", "code": "invalid_port", "value": "70000"}], "output": "..."}
 //
 // where code is a config.ProblemCode, or "cert_not_found", and identifies
-// the problem for clients that describe it in their own words.
-//
-// Sites are exchanged as {"revision": 1, "sites": [{"id": "...", "config": {...}}]},
-// where each config is one entry of servers. A PUT must carry the revision
-// it is based on, and fails with 409 Conflict if the sites have been changed
-// since then.
+// the problem for clients that describe it in their own words. Problems with
+// a submitted site refer to it as servers[0]. Only validate and generate
+// answer in plain text, unless the request accepts application/json.
 func NewHandler(opts Options) http.Handler {
 	ui, err := fs.Sub(dist, "dist")
 	if err != nil {
 		panic(err) // dist is embedded, so this cannot happen
 	}
 	files := http.FileServerFS(ui)
-	h := &handler{gen: opts.Generator, sites: opts.Sites, certs: opts.Certs, log: opts.Logger}
-	example := opts.Example
+	h := &handler{m: opts.Manager, gen: opts.Generator, log: opts.Logger}
 
 	mux := http.NewServeMux()
 	// Only the index page and the build output are routed to the file server,
@@ -84,11 +85,18 @@ func NewHandler(opts Options) http.Handler {
 	mux.Handle("GET /assets/", immutable(files))
 	mux.HandleFunc("GET /api/example", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write(example)
+		w.Write(opts.Example)
 	})
-	mux.HandleFunc("GET /api/sites", h.getSites)
-	mux.HandleFunc("PUT /api/sites", h.putSites)
+	mux.HandleFunc("GET /api/sites", h.listSites)
+	mux.HandleFunc("POST /api/sites", h.createSite)
+	mux.HandleFunc("PUT /api/sites", h.replaceSites)
+	mux.HandleFunc("PUT /api/sites/{id}", h.updateSite)
+	mux.HandleFunc("DELETE /api/sites/{id}", h.deleteSite)
+	mux.HandleFunc("GET /api/status", h.status)
+	mux.HandleFunc("POST /api/apply", h.apply)
+	mux.HandleFunc("GET /api/nginx.conf", h.nginxConf)
 	mux.HandleFunc("GET /api/certificates", h.certificates)
+	mux.HandleFunc("POST /api/certificates", h.issueCertificate)
 	mux.HandleFunc("POST /api/validate", h.validate)
 	mux.HandleFunc("POST /api/generate", h.generate)
 	return mux
@@ -104,94 +112,151 @@ func immutable(next http.Handler) http.Handler {
 }
 
 type handler struct {
-	gen   *nginx.Generator
-	sites *store.Store
-	certs CertLister
-	log   *slog.Logger
+	m   *manager.Manager
+	gen *nginx.Generator
+	log *slog.Logger
 }
 
-type sitesDoc struct {
-	Revision int64        `json:"revision"`
-	Sites    []store.Site `json:"sites"`
+type siteResponse struct {
+	store.Site
+	// Problems are set for invalid sites stored by earlier versions, which
+	// are not applied.
+	Problems []fieldError `json:"problems,omitempty"`
 }
 
-func (h *handler) getSites(w http.ResponseWriter, r *http.Request) {
-	sites, revision, err := h.sites.Sites(r.Context())
+func (h *handler) listSites(w http.ResponseWriter, r *http.Request) {
+	infos, err := h.m.Sites(r.Context())
 	if err != nil {
-		h.log.ErrorContext(r.Context(), "loading sites", "err", err)
-		writeError(w, r, http.StatusInternalServerError, err)
+		h.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, sitesDoc{revision, sites})
+	sites := make([]siteResponse, len(infos))
+	for i, info := range infos {
+		sites[i] = siteResponse{Site: info.Site}
+		if info.Problem != nil {
+			sites[i].Problems = describe(info.Problem).Fields
+			if len(sites[i].Problems) == 0 {
+				sites[i].Problems = []fieldError{{Message: info.Problem.Error()}}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string][]siteResponse{"sites": sites})
 }
 
-var siteID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+type siteRequest struct {
+	Config json.RawMessage `json:"config"`
+}
 
-func (h *handler) putSites(w http.ResponseWriter, r *http.Request) {
-	body, ok := readBody(w, r)
-	if !ok {
+func (h *handler) createSite(w http.ResponseWriter, r *http.Request) {
+	var req siteRequest
+	if !decodeJSON(w, r, &req) || !checkObject(w, req.Config) {
 		return
 	}
-	var doc sitesDoc
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&doc); err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
+	site, err := h.m.CreateSite(r.Context(), req.Config)
+	if err != nil {
+		h.fail(w, r, err)
 		return
 	}
-	// Sites are drafts, so they are only checked to match the schema.
-	seen := make(map[string]bool, len(doc.Sites))
-	for i, site := range doc.Sites {
-		err := checkSite(site)
-		if err == nil && seen[site.ID] {
-			err = fmt.Errorf("duplicate ID %q", site.ID)
-		}
-		if err != nil {
-			writeError(w, r, http.StatusBadRequest, fmt.Errorf("sites[%d]: %w", i, err))
+	writeJSON(w, http.StatusCreated, site)
+}
+
+func (h *handler) updateSite(w http.ResponseWriter, r *http.Request) {
+	var req siteRequest
+	if !decodeJSON(w, r, &req) || !checkObject(w, req.Config) {
+		return
+	}
+	site, err := h.m.UpdateSite(r.Context(), r.PathValue("id"), req.Config)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, site)
+}
+
+func (h *handler) deleteSite(w http.ResponseWriter, r *http.Request) {
+	if err := h.m.DeleteSite(r.Context(), r.PathValue("id")); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) replaceSites(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Configs []json.RawMessage `json:"configs"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	for _, cfg := range req.Configs {
+		if !checkObject(w, cfg) {
 			return
 		}
-		seen[site.ID] = true
 	}
-
-	revision, err := h.sites.ReplaceSites(r.Context(), doc.Sites, doc.Revision)
-	switch {
-	case errors.Is(err, store.ErrConflict):
-		writeError(w, r, http.StatusConflict, err)
-		return
-	case err != nil:
-		h.log.ErrorContext(r.Context(), "storing sites", "err", err)
-		writeError(w, r, http.StatusInternalServerError, err)
+	sites, err := h.m.ReplaceSites(r.Context(), req.Configs)
+	if err != nil {
+		h.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]int64{"revision": revision})
+	writeJSON(w, http.StatusOK, map[string][]store.Site{"sites": sites})
 }
 
-func checkSite(site store.Site) error {
-	if !siteID.MatchString(site.ID) {
-		return fmt.Errorf("invalid ID %q", site.ID)
+func (h *handler) status(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, h.m.Status())
+}
+
+func (h *handler) apply(w http.ResponseWriter, r *http.Request) {
+	if err := h.m.Apply(r.Context()); err != nil {
+		h.fail(w, r, err)
+		return
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(site.Config, &object); err != nil {
-		return errors.New("config must be a JSON object")
+	writeJSON(w, http.StatusOK, h.m.Status())
+}
+
+func (h *handler) nginxConf(w http.ResponseWriter, r *http.Request) {
+	conf, err := h.m.NginxConfig(r.Context())
+	if err != nil {
+		h.fail(w, r, err)
+		return
 	}
-	if _, err := config.DecodeServer(site.Config); err != nil {
-		return fmt.Errorf("config: %w", err)
-	}
-	return nil
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write(conf)
 }
 
 func (h *handler) certificates(w http.ResponseWriter, r *http.Request) {
-	names := []string{} // encoded as [] rather than null
-	if h.certs != nil {
-		listed, err := h.certs.ListCerts(r.Context())
-		if err != nil {
+	certs, err := h.m.Certificates(r.Context())
+	if err != nil {
+		if !errors.Is(err, manager.ErrNoCA) {
 			h.log.WarnContext(r.Context(), "listing certificates", "err", err)
-			writeError(w, r, http.StatusServiceUnavailable, err)
-			return
 		}
-		names = append(names, listed...)
+		writeError(w, r, http.StatusServiceUnavailable, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string][]string{"certificates": names})
+	writeJSON(w, http.StatusOK, map[string][]acme.Cert{"certificates": certs})
+}
+
+func (h *handler) issueCertificate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Domains []string `json:"domains"`
+		DNS     string   `json:"dns"` // an acme.sh DNS API, or empty for HTTP
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	// Issuing takes a while; let acme.sh finish even if the client leaves.
+	ctx := context.WithoutCancel(r.Context())
+	output, err := h.m.IssueCertificate(ctx, req.Domains, req.DNS)
+	switch {
+	case errors.Is(err, acme.ErrInvalidRequest), errors.Is(err, manager.ErrNoWebroot):
+		writeError(w, r, http.StatusBadRequest, err)
+	case errors.Is(err, manager.ErrNoCA):
+		writeError(w, r, http.StatusServiceUnavailable, err)
+	case err != nil:
+		h.log.WarnContext(r.Context(), "issuing a certificate", "domains", req.Domains, "err", err)
+		writeJSON(w, http.StatusBadGateway, errorResponse{Message: err.Error(), Output: output})
+	default:
+		writeJSON(w, http.StatusCreated, map[string]string{"output": output})
+	}
 }
 
 func (h *handler) validate(w http.ResponseWriter, r *http.Request) {
@@ -205,24 +270,56 @@ func (h *handler) generate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-
 	conf, err := h.gen.Generate(r.Context(), cfg)
-	switch {
-	case errors.Is(err, nginx.ErrCertNotFound):
-		writeError(w, r, http.StatusUnprocessableEntity, err)
-		return
-	case err != nil:
-		h.log.ErrorContext(r.Context(), "generating nginx config", "err", err)
-		writeError(w, r, http.StatusInternalServerError, err)
+	if err != nil {
+		h.fail(w, r, err)
 		return
 	}
-
 	if wantsJSON(r) {
 		writeJSON(w, http.StatusOK, map[string]string{"config": string(conf)})
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Write(conf)
+}
+
+// parse returns the configuration in the request body. If it is missing or
+// invalid, parse writes an error response and returns false.
+func (h *handler) parse(w http.ResponseWriter, r *http.Request) (*config.Config, bool) {
+	body, ok := readBody(w, r)
+	if !ok {
+		return nil, false
+	}
+	cfg, err := config.Parse(body)
+	if err != nil {
+		h.fail(w, r, err)
+		return nil, false
+	}
+	return cfg, true
+}
+
+// fail writes the response for err, choosing the status from its type.
+func (h *handler) fail(w http.ResponseWriter, r *http.Request, err error) {
+	var (
+		fieldErrs config.FieldErrors
+		fieldErr  *config.FieldError
+		syntax    *config.SyntaxError
+		applyErr  *apply.Error
+	)
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, nginx.ErrCertNotFound):
+		status = http.StatusUnprocessableEntity
+	case errors.As(err, &fieldErrs), errors.As(err, &fieldErr), errors.As(err, &syntax):
+		status = http.StatusBadRequest
+	case errors.Is(err, manager.ErrNotFound):
+		status = http.StatusNotFound
+	case errors.As(err, &applyErr):
+		status = http.StatusBadGateway // nginx rejected the configuration
+	default:
+		h.log.ErrorContext(r.Context(), "handling "+r.Method+" "+r.URL.Path, "err", err)
+	}
+	writeError(w, r, status, err)
 }
 
 // readBody returns the request body. If it cannot be read or is too large,
@@ -241,35 +338,52 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	return body, true
 }
 
-// parse returns the configuration in the request body. If it is missing or
-// invalid, parse writes an error response and returns false.
-func (h *handler) parse(w http.ResponseWriter, r *http.Request) (*config.Config, bool) {
+// decodeJSON decodes the JSON request body into v. If that fails, it writes
+// an error response and returns false.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	body, ok := readBody(w, r)
 	if !ok {
-		return nil, false
+		return false
 	}
-
-	cfg, err := config.Parse(body)
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return nil, false
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+		return false
 	}
-	return cfg, true
+	return true
 }
 
-// wantsJSON reports whether the client asked for JSON responses, as the UI
-// does. Other clients, such as curl, get plain text.
+// checkObject makes sure that a site's config is a JSON object. If not, it
+// writes an error response and returns false.
+func checkObject(w http.ResponseWriter, cfg json.RawMessage) bool {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(cfg, &object); err != nil || object == nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "config must be a JSON object"})
+		return false
+	}
+	return true
+}
+
+// wantsJSON reports whether to answer in JSON. Validate and generate answer
+// in plain text unless asked for JSON, as the UI does, so that they are easy
+// to use with curl.
 func wantsJSON(r *http.Request) bool {
-	return strings.Contains(r.Header.Get("Accept"), "application/json")
+	switch r.URL.Path {
+	case "/api/validate", "/api/generate":
+		return strings.Contains(r.Header.Get("Accept"), "application/json")
+	}
+	return true
 }
 
 type errorResponse struct {
 	Message string       `json:"message"`
 	Fields  []fieldError `json:"fields,omitempty"`
+	Output  string       `json:"output,omitempty"` // of nginx or acme.sh
 }
 
 type fieldError struct {
-	Field   string `json:"field"`
+	Field   string `json:"field,omitempty"`
 	Message string `json:"message"`
 	Code    string `json:"code,omitempty"`
 	Value   string `json:"value,omitempty"`
@@ -278,13 +392,15 @@ type fieldError struct {
 // certNotFound is the problem code of missing certificates.
 const certNotFound = "cert_not_found"
 
-func writeError(w http.ResponseWriter, r *http.Request, status int, err error) {
-	if !wantsJSON(r) {
-		http.Error(w, err.Error(), status)
-		return
+// describe returns the response describing err.
+func describe(err error) errorResponse {
+	resp := errorResponse{Message: err.Error()}
+	var applyErr *apply.Error
+	if errors.As(err, &applyErr) {
+		resp.Message = applyErr.Step + " failed: " + applyErr.Err.Error()
+		resp.Output = applyErr.Output
 	}
 
-	resp := errorResponse{Message: err.Error()}
 	var list config.FieldErrors
 	var single *config.FieldError
 	switch {
@@ -303,7 +419,15 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, err error) {
 		}
 		resp.Fields = append(resp.Fields, f)
 	}
-	writeJSON(w, status, resp)
+	return resp
+}
+
+func writeError(w http.ResponseWriter, r *http.Request, status int, err error) {
+	if !wantsJSON(r) {
+		http.Error(w, err.Error(), status)
+		return
+	}
+	writeJSON(w, status, describe(err))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

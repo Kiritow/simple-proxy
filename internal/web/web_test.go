@@ -9,166 +9,183 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/kiritow/simple-proxy/internal/acme"
+	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/manager"
 	"github.com/kiritow/simple-proxy/internal/nginx"
 	"github.com/kiritow/simple-proxy/internal/store"
 	"github.com/kiritow/simple-proxy/internal/web"
 )
 
-// fakeCerts knows no certificate files, but lists names (or fails to).
-type fakeCerts struct {
-	names []string
-	err   error
+// fakeCA knows the certificate "*.example.com" and fails to issue for
+// fail.example.com.
+type fakeCA struct{}
+
+func (fakeCA) LocateCert(_ context.Context, name string) (nginx.Certificate, error) {
+	if name != "*.example.com" {
+		return nginx.Certificate{}, fmt.Errorf("%w: %s", nginx.ErrCertNotFound, name)
+	}
+	return nginx.Certificate{Fullchain: "/c/full.cer", Key: "/c/key", CA: "/c/ca.cer"}, nil
 }
 
-func (fakeCerts) LocateCert(_ context.Context, name string) (nginx.Certificate, error) {
-	return nginx.Certificate{}, fmt.Errorf("%w: %s", nginx.ErrCertNotFound, name)
+func (fakeCA) Certs(context.Context) ([]acme.Cert, error) {
+	return []acme.Cert{{Name: "*.example.com", Domains: []string{"*.example.com"}, CA: "ZeroSSL.com"}}, nil
 }
 
-func (f fakeCerts) ListCerts(context.Context) ([]string, error) { return f.names, f.err }
+func (fakeCA) Issue(_ context.Context, req acme.IssueRequest) (string, error) {
+	if req.Domains[0] == "fail.example.com" {
+		return "Verify error: 404", errors.New("acme.sh --issue: exit status 1")
+	}
+	return "Cert success.", nil
+}
 
-const (
-	example     = "servers: []\n"
-	validConfig = "servers:\n- server_name: example.com\n  default: {port: 3000}\n"
-	httpsConfig = "servers:\n- server_name: example.com\n  https: true\n  default: {port: 3000}\n"
-	badConfig   = `{"servers": [{"server_name": "a;b", "default": {"port": 70000}}]}`
-)
+const example = "servers: []\n"
 
-func newHandler(t *testing.T, certs web.CertLister) http.Handler {
+type options struct {
+	applies bool // with a fake nginx rejecting "reject_me"
+	ca      bool
+	webroot bool
+}
+
+func newHandler(t *testing.T, o options) http.Handler {
 	t.Helper()
-	sites, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "sites.db"))
+	dir := t.TempDir()
+	s, err := store.Open(t.Context(), filepath.Join(dir, "sites.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { sites.Close() })
+	t.Cleanup(func() { s.Close() })
+
 	gen := &nginx.Generator{}
-	if c, ok := certs.(nginx.CertLocator); ok {
-		gen.Certs = c
+	opts := manager.Options{Store: s, Generator: gen}
+	if o.ca {
+		gen.Certs, opts.CA = fakeCA{}, fakeCA{}
+	}
+	if o.webroot {
+		gen.ACMEWebroot, opts.ACMEWebroot = "/var/www/acme", "/var/www/acme"
+	}
+	if o.applies {
+		if runtime.GOOS == "windows" {
+			t.Skip("needs a POSIX shell")
+		}
+		conf := filepath.Join(dir, "proxy.conf")
+		opts.Applier = &apply.Applier{
+			Path: conf,
+			Test: []string{"sh", "-c", `if grep -q reject_me "$0"; then echo "nginx: [emerg] unknown directive" >&2; exit 1; fi`, conf},
+		}
 	}
 	return web.NewHandler(web.Options{
+		Manager:   manager.New(opts),
 		Generator: gen,
-		Sites:     sites,
-		Certs:     certs,
 		Example:   []byte(example),
 		Logger:    slog.New(slog.DiscardHandler),
 	})
 }
 
-type request struct {
-	method, path, body string
-	json               bool // send Accept: application/json
+type step struct {
+	name, method, path, body string
+	json                     bool // send Accept: application/json
+	wantStatus               int
+	wantBody                 string // substring
 }
 
-func (req request) do(h http.Handler) (status int, contentType, body string) {
-	r := httptest.NewRequest(req.method, req.path, strings.NewReader(req.body))
-	if req.json {
-		r.Header.Set("Accept", "application/json")
-	}
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, r)
-	res := rec.Result()
-	b, _ := io.ReadAll(res.Body)
-	return res.StatusCode, res.Header.Get("Content-Type"), string(b)
-}
-
-func TestHandler(t *testing.T) {
-	h := newHandler(t, fakeCerts{names: []string{"*.example.com"}})
-
-	for _, tc := range []struct {
-		name       string
-		req        request
-		wantStatus int
-		wantType   string // prefix
-		wantBody   string // substring
-	}{
-		{"ui", request{"GET", "/", "", false}, http.StatusOK, "text/html", `<div id="root">`},
-		{"example", request{"GET", "/api/example", "", false}, http.StatusOK, "text/plain", example},
-		{"certificates", request{"GET", "/api/certificates", "", false}, http.StatusOK, "application/json", `{"certificates":["*.example.com"]}`},
-
-		{"generate text", request{"POST", "/api/generate", validConfig, false}, http.StatusOK, "text/plain", "proxy_pass http://127.0.0.1:3000;"},
-		{"generate json", request{"POST", "/api/generate", validConfig, true}, http.StatusOK, "application/json", `"config":"# Auto generated`},
-		{"invalid text", request{"POST", "/api/generate", badConfig, false}, http.StatusBadRequest, "text/plain", "servers[0].server_name: invalid name"},
-		{
-			"invalid json", request{"POST", "/api/generate", badConfig, true}, http.StatusBadRequest, "application/json",
-			`"fields":[{"field":"servers[0].server_name","message":"invalid name \"a;b\"","code":"invalid_name","value":"a;b"},{"field":"servers[0].default.port","message":"70000 is not a valid port","code":"invalid_port","value":"70000"}]`,
-		},
-		{"syntax error json", request{"POST", "/api/generate", "servers: [", true}, http.StatusBadRequest, "application/json", `{"message":"yaml: `},
-		{"missing certificate text", request{"POST", "/api/generate", httpsConfig, false}, http.StatusUnprocessableEntity, "text/plain", "certificate not found"},
-		{
-			"missing certificate json", request{"POST", "/api/generate", httpsConfig, true}, http.StatusUnprocessableEntity, "application/json",
-			`"fields":[{"field":"servers[0].cert_name","message":"certificate not found: example.com","code":"cert_not_found"}]`,
-		},
-		{"too large", request{"POST", "/api/generate", strings.Repeat("#", web.MaxConfigSize+1), false}, http.StatusRequestEntityTooLarge, "text/plain", "too large"},
-
-		{"validate ok", request{"POST", "/api/validate", httpsConfig, true}, http.StatusNoContent, "", ""},
-		{"validate invalid", request{"POST", "/api/validate", badConfig, true}, http.StatusBadRequest, "application/json", `"field":"servers[0].default.port"`},
-
-		{"wrong method", request{"GET", "/api/generate", "", false}, http.StatusMethodNotAllowed, "text/plain", ""},
-		{"unknown page", request{"GET", "/nope", "", false}, http.StatusNotFound, "text/plain", ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			status, contentType, body := tc.req.do(h)
-			if status != tc.wantStatus {
-				t.Errorf("status = %d, want %d; body:\n%s", status, tc.wantStatus, body)
-			}
-			if !strings.HasPrefix(contentType, tc.wantType) {
-				t.Errorf("Content-Type = %q, want %q", contentType, tc.wantType)
-			}
-			if !strings.Contains(body, tc.wantBody) {
-				t.Errorf("body does not contain %s:\n%s", tc.wantBody, body)
-			}
-		})
-	}
-}
-
-func TestCertificatesUnavailable(t *testing.T) {
-	h := newHandler(t, fakeCerts{err: errors.New("acme.sh: not found")})
-	status, _, body := request{"GET", "/api/certificates", "", true}.do(h)
-	if status != http.StatusServiceUnavailable || !strings.Contains(body, "acme.sh: not found") {
-		t.Errorf("got %d %s, want 503 with the error", status, body)
-	}
-}
-
-func TestCertificatesNone(t *testing.T) {
-	h := newHandler(t, nil)
-	status, _, body := request{"GET", "/api/certificates", "", true}.do(h)
-	if status != http.StatusOK || strings.TrimSpace(body) != `{"certificates":[]}` {
-		t.Errorf("got %d %s, want an empty list", status, body)
+func run(t *testing.T, h http.Handler, steps []step) {
+	t.Helper()
+	for _, s := range steps {
+		r := httptest.NewRequest(s.method, s.path, strings.NewReader(s.body))
+		if s.json {
+			r.Header.Set("Accept", "application/json")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		body, _ := io.ReadAll(rec.Result().Body)
+		if rec.Code != s.wantStatus || !strings.Contains(string(body), s.wantBody) {
+			t.Errorf("%s: %s %s = %d %s\nwant %d containing %s", s.name, s.method, s.path, rec.Code, body, s.wantStatus, s.wantBody)
+		}
 	}
 }
 
 func TestSites(t *testing.T) {
-	h := newHandler(t, nil)
-	get := request{"GET", "/api/sites", "", true}
-	put := func(body string) request { return request{"PUT", "/api/sites", body, true} }
+	h := newHandler(t, options{applies: true, ca: true})
+	run(t, h, []step{
+		{"empty", "GET", "/api/sites", "", false, 200, `{"sites":[]}`},
+		{"create", "POST", "/api/sites", `{"config": {"server_name": "a.example.com", "default": {"port": 3000}}}`, false, 201, `"config":{"server_name":"a.example.com","default":{"port":3000}}`},
+		{"invalid", "POST", "/api/sites", `{"config": {"server_name": "b;", "default": {"port": 70000}}}`, false, 400,
+			`"fields":[{"field":"servers[0].server_name","message":"invalid name \"b;\"","code":"invalid_name","value":"b;"},{"field":"servers[0].default.port","message":"70000 is not a valid port","code":"invalid_port","value":"70000"}]`},
+		{"domain in use", "POST", "/api/sites", `{"config": {"server_name": "a.example.com", "default": {"port": 1}}}`, false, 400, `"code":"domain_in_use","value":"a.example.com"`},
+		{"missing certificate", "POST", "/api/sites", `{"config": {"server_name": "b.example.com", "https": true, "default": {"port": 1}}}`, false, 422, `"field":"servers[0].cert_name","message":"certificate not found: b.example.com","code":"cert_not_found"`},
+		{"https", "POST", "/api/sites", `{"config": {"server_name": "c.example.com", "cert_name": "*.example.com", "default": {"port": 1}}}`, false, 201, `"cert_name":"*.example.com"`},
+		{"rejected by nginx", "POST", "/api/sites", `{"config": {"server_name": "d.example.com", "options": ["reject_me on"], "default": {"port": 1}}}`, false, 502, `"output":"nginx: [emerg] unknown directive"`},
+		{"unknown schema field", "POST", "/api/sites", `{"config": {"server_name": "d.example.com", "websockets": true}}`, false, 400, "field websockets not found"},
+		{"not an object", "POST", "/api/sites", `{"config": []}`, false, 400, "config must be a JSON object"},
+		{"unknown request field", "POST", "/api/sites", `{"conf": {}}`, false, 400, "unknown field"},
+		{"nginx.conf", "GET", "/api/nginx.conf", "", false, 200, "server_name c.example.com;"},
+		{"update missing", "PUT", "/api/sites/nope", `{"config": {"server_name": "x.example.com", "default": {"port": 1}}}`, false, 404, "site not found"},
+		{"delete missing", "DELETE", "/api/sites/nope", "", false, 404, "site not found"},
+		{"replace all", "PUT", "/api/sites", `{"configs": [{"server_name": "x.example.com", "default": {"port": 1}}]}`, false, 200, `"server_name":"x.example.com"`},
+		{"replaced", "GET", "/api/nginx.conf", "", false, 200, "server_name x.example.com;"},
+		{"status", "GET", "/api/status", "", false, 200, `"applies":true`},
+		{"apply", "POST", "/api/apply", "", false, 200, `"applied_at":`},
+	})
+}
 
-	steps := []struct {
-		name       string
-		req        request
-		wantStatus int
-		wantBody   string
-	}{
-		{"empty", get, http.StatusOK, `{"revision":0,"sites":[]}`},
-		{
-			"save a draft", put(`{"revision": 0, "sites": [{"id": "a1", "config": {"server_name": "", "default": {"port": 70000}}}]}`),
-			http.StatusOK, `{"revision":1}`,
-		},
-		{"load it", get, http.StatusOK, `{"revision":1,"sites":[{"id":"a1","config":{"server_name":"","default":{"port":70000}}}]}`},
-		{"stale revision", put(`{"revision": 0, "sites": []}`), http.StatusConflict, "changed by someone else"},
-		{"unknown field", put(`{"revision": 1, "sites": [{"id": "a1", "config": {"websockets": true}}]}`), http.StatusBadRequest, "sites[0]: config: "},
-		{"not an object", put(`{"revision": 1, "sites": [{"id": "a1", "config": []}]}`), http.StatusBadRequest, "config must be a JSON object"},
-		{"bad ID", put(`{"revision": 1, "sites": [{"id": "a/b", "config": {}}]}`), http.StatusBadRequest, `invalid ID \"a/b\"`},
-		{"duplicate ID", put(`{"revision": 1, "sites": [{"id": "a", "config": {}}, {"id": "a", "config": {}}]}`), http.StatusBadRequest, `sites[1]: duplicate ID \"a\"`},
-		{"unknown top-level field", put(`{"revision": 1, "site": []}`), http.StatusBadRequest, "unknown field"},
-		{"delete all", put(`{"revision": 1, "sites": []}`), http.StatusOK, `{"revision":2}`},
-		{"empty again", get, http.StatusOK, `{"revision":2,"sites":[]}`},
+func TestUpdateAndDelete(t *testing.T) {
+	h := newHandler(t, options{})
+	r := httptest.NewRecorder()
+	h.ServeHTTP(r, httptest.NewRequest("POST", "/api/sites", strings.NewReader(`{"config": {"server_name": "a.example.com", "default": {"port": 1}}}`)))
+	if r.Code != 201 {
+		t.Fatalf("create: %d %s", r.Code, r.Body)
 	}
-	for _, step := range steps {
-		status, _, body := step.req.do(h)
-		if status != step.wantStatus || !strings.Contains(body, step.wantBody) {
-			t.Fatalf("%s: got %d %s; want %d containing %s", step.name, status, body, step.wantStatus, step.wantBody)
-		}
+	var id string
+	if _, err := fmt.Sscanf(r.Body.String(), `{"id":%q`, &id); err != nil {
+		t.Fatalf("no id in %s: %v", r.Body, err)
 	}
+	run(t, h, []step{
+		{"update", "PUT", "/api/sites/" + id, `{"config": {"server_name": "a.example.com", "default": {"port": 2}}}`, false, 200, `"port":2`},
+		{"listed", "GET", "/api/sites", "", false, 200, `"id":"` + id + `","config":{"server_name":"a.example.com","default":{"port":2}}`},
+		{"delete", "DELETE", "/api/sites/" + id, "", false, 204, ""},
+		{"gone", "GET", "/api/sites", "", false, 200, `{"sites":[]}`},
+	})
+}
+
+func TestCertificates(t *testing.T) {
+	run(t, newHandler(t, options{ca: true, webroot: true}), []step{
+		{"list", "GET", "/api/certificates", "", false, 200, `{"certificates":[{"name":"*.example.com","domains":["*.example.com"],"key_length":"","ca":"ZeroSSL.com","created":"","renew":""}]}`},
+		{"issue over HTTP", "POST", "/api/certificates", `{"domains": ["a.example.com"]}`, false, 201, `{"output":"Cert success."}`},
+		{"issue over DNS", "POST", "/api/certificates", `{"domains": ["*.example.org"], "dns": "dns_cf"}`, false, 201, "Cert success."},
+		{"failure", "POST", "/api/certificates", `{"domains": ["fail.example.com"]}`, false, 502, `"output":"Verify error: 404"`},
+	})
+	run(t, newHandler(t, options{ca: true}), []step{
+		{"no webroot", "POST", "/api/certificates", `{"domains": ["a.example.com"]}`, false, 400, "ACME webroot"},
+	})
+	run(t, newHandler(t, options{}), []step{
+		{"no acme.sh: list", "GET", "/api/certificates", "", false, 503, "acme.sh is not configured"},
+		{"no acme.sh: issue", "POST", "/api/certificates", `{"domains": ["a.example.com"], "dns": "dns_cf"}`, false, 503, "acme.sh is not configured"},
+		{"status", "GET", "/api/status", "", false, 200, `"applies":false,"certificates":false`},
+	})
+}
+
+func TestStatelessAPI(t *testing.T) {
+	const (
+		valid = "servers:\n- server_name: example.com\n  default: {port: 3000}\n"
+		bad   = `{"servers": [{"server_name": "a;b", "default": {"port": 70000}}]}`
+	)
+	run(t, newHandler(t, options{}), []step{
+		{"ui", "GET", "/", "", false, 200, `<div id="root">`},
+		{"example", "GET", "/api/example", "", false, 200, example},
+		{"generate text", "POST", "/api/generate", valid, false, 200, "proxy_pass http://127.0.0.1:3000;"},
+		{"generate json", "POST", "/api/generate", valid, true, 200, `"config":"# Auto generated`},
+		{"invalid text", "POST", "/api/generate", bad, false, 400, "servers[0].server_name: invalid name"},
+		{"invalid json", "POST", "/api/generate", bad, true, 400, `"code":"invalid_name"`},
+		{"syntax error", "POST", "/api/generate", "servers: [", true, 400, `{"message":"yaml: `},
+		{"validate ok", "POST", "/api/validate", valid, true, 204, ""},
+		{"validate invalid", "POST", "/api/validate", bad, true, 400, `"field":"servers[0].default.port"`},
+		{"too large", "POST", "/api/generate", strings.Repeat("#", web.MaxConfigSize+1), false, 413, "too large"},
+		{"wrong method", "GET", "/api/generate", "", false, 405, ""},
+		{"unknown page", "GET", "/nope", "", false, 404, ""},
+	})
 }

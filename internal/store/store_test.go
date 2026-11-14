@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -26,19 +25,19 @@ func site(id, config string) store.Site {
 	return store.Site{ID: id, Config: json.RawMessage(config)}
 }
 
-func sites(t *testing.T, s *store.Store) ([]store.Site, int64) {
+func sites(t *testing.T, s *store.Store) []store.Site {
 	t.Helper()
-	got, rev, err := s.Sites(t.Context())
+	got, err := s.Sites(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return got, rev
+	return got
 }
 
 func TestEmpty(t *testing.T) {
-	got, rev := sites(t, open(t, filepath.Join(t.TempDir(), "sites.db")))
-	if len(got) != 0 || got == nil || rev != 0 {
-		t.Errorf("Sites = %v (nil: %t), %d; want an empty list and revision 0", got, got == nil, rev)
+	got := sites(t, open(t, filepath.Join(t.TempDir(), "sites.db")))
+	if len(got) != 0 || got == nil {
+		t.Errorf("Sites = %v (nil: %t), want an empty list", got, got == nil)
 	}
 }
 
@@ -49,9 +48,8 @@ func TestReplaceSites(t *testing.T) {
 
 	a := site("a", `{"server_name": "a.example.com", "default": {"port": 1}}`)
 	b := site("b", `{"server_name": "b.example.com"}`)
-	rev, err := s.ReplaceSites(ctx, []store.Site{a, b}, 0)
-	if err != nil || rev != 1 {
-		t.Fatalf("ReplaceSites = %d, %v; want 1", rev, err)
+	if err := s.ReplaceSites(ctx, []store.Site{a, b}); err != nil {
+		t.Fatal(err)
 	}
 
 	// Configs come back minified, in order.
@@ -59,44 +57,28 @@ func TestReplaceSites(t *testing.T) {
 		site("a", `{"server_name":"a.example.com","default":{"port":1}}`),
 		site("b", `{"server_name":"b.example.com"}`),
 	}
-	if got, rev := sites(t, s); !reflect.DeepEqual(got, want) || rev != 1 {
-		t.Errorf("Sites = %s, %d; want %s, 1", got, rev, want)
+	if got := sites(t, s); !reflect.DeepEqual(got, want) {
+		t.Errorf("Sites = %s, want %s", got, want)
 	}
 
 	// Reorder, change b, drop a, add c.
 	c := site("c", `{"server_name": "c.example.com"}`)
 	b2 := site("b", `{"server_name": "b2.example.com"}`)
-	if rev, err := s.ReplaceSites(ctx, []store.Site{c, b2}, 1); err != nil || rev != 2 {
-		t.Fatalf("ReplaceSites = %d, %v; want 2", rev, err)
+	if err := s.ReplaceSites(ctx, []store.Site{c, b2}); err != nil {
+		t.Fatal(err)
 	}
 	want = []store.Site{
 		site("c", `{"server_name":"c.example.com"}`),
 		site("b", `{"server_name":"b2.example.com"}`),
 	}
-	if got, _ := sites(t, s); !reflect.DeepEqual(got, want) {
+	if got := sites(t, s); !reflect.DeepEqual(got, want) {
 		t.Errorf("Sites = %s, want %s", got, want)
 	}
 
 	// Everything persists.
 	s.Close()
-	if got, rev := sites(t, open(t, path)); !reflect.DeepEqual(got, want) || rev != 2 {
-		t.Errorf("after reopening, Sites = %s, %d; want %s, 2", got, rev, want)
-	}
-}
-
-func TestReplaceSitesConflict(t *testing.T) {
-	s := open(t, filepath.Join(t.TempDir(), "sites.db"))
-	ctx := t.Context()
-	if _, err := s.ReplaceSites(ctx, []store.Site{site("a", `{}`)}, 0); err != nil {
-		t.Fatal(err)
-	}
-	// A second writer that started from revision 0 must not overwrite.
-	_, err := s.ReplaceSites(ctx, nil, 0)
-	if !errors.Is(err, store.ErrConflict) {
-		t.Fatalf("ReplaceSites error = %v, want ErrConflict", err)
-	}
-	if got, rev := sites(t, s); len(got) != 1 || rev != 1 {
-		t.Errorf("after a conflict, Sites = %s, %d; want the earlier site, 1", got, rev)
+	if got := sites(t, open(t, path)); !reflect.DeepEqual(got, want) {
+		t.Errorf("after reopening, Sites = %s, want %s", got, want)
 	}
 }
 
@@ -107,12 +89,12 @@ func TestReplaceSitesRejectsBadInput(t *testing.T) {
 		"duplicate ID": {site("a", `{}`), site("a", `{}`)},
 		"invalid JSON": {site("a", `{`)},
 	} {
-		if _, err := s.ReplaceSites(ctx, input, 0); err == nil {
+		if err := s.ReplaceSites(ctx, input); err == nil {
 			t.Errorf("%s: ReplaceSites succeeded, want an error", name)
 		}
 	}
-	if got, rev := sites(t, s); len(got) != 0 || rev != 0 {
-		t.Errorf("after failed writes, Sites = %s, %d; want nothing stored", got, rev)
+	if got := sites(t, s); len(got) != 0 {
+		t.Errorf("after failed writes, Sites = %s, want nothing stored", got)
 	}
 }
 
@@ -120,7 +102,7 @@ func TestUpdatedAtChangesOnlyWithConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sites.db")
 	s := open(t, path)
 	ctx := t.Context()
-	if _, err := s.ReplaceSites(ctx, []store.Site{site("a", `{}`), site("b", `{}`)}, 0); err != nil {
+	if err := s.ReplaceSites(ctx, []store.Site{site("a", `{}`), site("b", `{}`)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -133,7 +115,7 @@ func TestUpdatedAtChangesOnlyWithConfig(t *testing.T) {
 	if _, err := db.ExecContext(ctx, "UPDATE sites SET updated_at = 'then'"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ReplaceSites(ctx, []store.Site{site("a", `{ }`), site("b", `{"gzip": true}`)}, 1); err != nil {
+	if err := s.ReplaceSites(ctx, []store.Site{site("a", `{ }`), site("b", `{"gzip": true}`)}); err != nil {
 		t.Fatal(err)
 	}
 	updated := map[string]string{}
@@ -170,5 +152,25 @@ func TestOpenRejectsNewerSchema(t *testing.T) {
 	if s, err := store.Open(t.Context(), path); err == nil {
 		s.Close()
 		t.Fatal("Open succeeded on a database from a newer version")
+	}
+}
+
+func TestMigrationDropsRevisions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sites.db")
+	open(t, path).Close()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version, tables int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_schema WHERE name = 'revision'").Scan(&tables); err != nil {
+		t.Fatal(err)
+	}
+	if version != 2 || tables != 0 {
+		t.Errorf("schema version %d with %d revision tables, want version 2 without", version, tables)
 	}
 }

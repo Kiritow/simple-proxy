@@ -1,5 +1,5 @@
-// Command simple-proxy serves a web UI and an HTTP API that generate nginx
-// reverse proxy configuration from a YAML description of virtual hosts.
+// Command simple-proxy manages nginx as a reverse proxy: sites configured in
+// its web UI or HTTP API are stored, and applied to nginx as they change.
 package main
 
 import (
@@ -14,10 +14,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/kiritow/simple-proxy/internal/acme"
+	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/manager"
 	"github.com/kiritow/simple-proxy/internal/nginx"
 	"github.com/kiritow/simple-proxy/internal/store"
 	"github.com/kiritow/simple-proxy/internal/web"
@@ -41,7 +44,11 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	addr := flags.String("addr", "127.0.0.1:8080", "`address` to serve HTTP on")
 	dbPath := flags.String("db", defaultDBPath(), "`path` of the SQLite database storing the sites")
-	acmeBin := flags.String("acme", defaultAcmeBin(), "`path` of the acme.sh script used to look up certificates")
+	nginxConf := flags.String("nginx-conf", "", "`path` of the nginx configuration file to manage, e.g. /etc/nginx/conf.d/proxy.conf; if empty, sites are only stored")
+	nginxTest := flags.String("nginx-test", "nginx -t", "`command` testing nginx's configuration")
+	nginxReload := flags.String("nginx-reload", "nginx -s reload", "`command` reloading nginx")
+	acmeBin := flags.String("acme", defaultAcmeBin(), "`path` of the acme.sh script managing certificates")
+	acmeWebroot := flags.String("acme-webroot", "", "`directory` served at /.well-known/acme-challenge/ to issue certificates over HTTP; if empty, only DNS validation is available")
 	fallbackCert := flags.String("fallback-cert", nginx.DefaultFallbackCert, "`path` of the certificate presented to requests for unknown hosts")
 	fallbackKey := flags.String("fallback-key", nginx.DefaultFallbackKey, "`path` of the private key of -fallback-cert")
 	_ = flags.Parse(args) // ExitOnError: Parse exits instead of returning errors
@@ -54,17 +61,50 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	defer sites.Close()
 	logger.Info("opened database", "path", *dbPath)
 
-	locator := acme.NewLocator(*acmeBin)
 	gen := &nginx.Generator{
-		Certs:        locator,
 		FallbackCert: *fallbackCert,
 		FallbackKey:  *fallbackKey,
+		ACMEWebroot:  *acmeWebroot,
 	}
+	opts := manager.Options{
+		Store:       sites,
+		Generator:   gen,
+		ACMEWebroot: *acmeWebroot,
+		RenewHook:   *nginxReload,
+		Logger:      logger,
+	}
+	if _, err := os.Stat(*acmeBin); err == nil {
+		ca := acme.NewClient(*acmeBin)
+		gen.Certs, opts.CA = ca, ca
+	} else {
+		logger.Warn("acme.sh not found: HTTPS sites and certificates are unavailable", "path", *acmeBin)
+	}
+	if *acmeWebroot != "" {
+		if err := os.MkdirAll(*acmeWebroot, 0o755); err != nil {
+			return err
+		}
+	}
+	if *nginxConf != "" {
+		opts.Applier = &apply.Applier{
+			Path:   *nginxConf,
+			Test:   strings.Fields(*nginxTest),
+			Reload: strings.Fields(*nginxReload),
+		}
+	}
+
+	m := manager.New(opts)
+	if opts.Applier == nil {
+		logger.Info("not managing nginx: set -nginx-conf to apply sites")
+	} else if err := m.Apply(ctx); err != nil {
+		logger.Warn("applying the stored sites failed", "err", err)
+	} else {
+		logger.Info("applied the stored sites", "path", *nginxConf)
+	}
+
 	srv := &http.Server{
 		Handler: web.NewHandler(web.Options{
+			Manager:   m,
 			Generator: gen,
-			Sites:     sites,
-			Certs:     locator,
 			Example:   exampleConfig,
 			Logger:    logger,
 		}),

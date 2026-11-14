@@ -1,6 +1,6 @@
 // Client for the HTTP API served by the Go server (internal/web).
 
-import type { ConfigJSON, StoredSite } from "@/lib/model"
+import type { ConfigJSON, ServerJSON } from "@/lib/model"
 
 export type FieldProblem = {
   field: string
@@ -13,27 +13,80 @@ export type ApiError = {
   status: number // 0 if the server could not be reached
   message: string
   fields: FieldProblem[]
+  output?: string // of nginx or acme.sh
 }
 
-export type GenerateResult =
-  { ok: true; config: string } | { ok: false; error: ApiError }
+// RequestError is thrown for failed requests.
+export class RequestError extends Error {
+  readonly error: ApiError
+  constructor(error: ApiError) {
+    super(error.message)
+    this.error = error
+  }
+}
 
-const json = {
-  Accept: "application/json",
-  "Content-Type": "application/json",
+// StoredSite is a site as stored on the server. Problems are set for invalid
+// sites stored by earlier versions, which are not applied.
+export type StoredSite = {
+  id: string
+  config: ServerJSON
+  problems?: FieldProblem[]
+}
+
+export type Status = {
+  applies: boolean
+  config_path?: string
+  test_command?: string
+  reload_command?: string
+  applied_at?: string
+  error?: string
+  output?: string
+  certificates: boolean
+  acme_webroot?: string
+}
+
+export type Certificate = {
+  name: string
+  domains: string[]
+  key_length: string
+  ca: string
+  created: string
+  renew: string
+}
+
+async function request<T>(
+  path: string,
+  init: RequestInit & { json?: unknown } = {}
+): Promise<T> {
+  const { json, ...rest } = init
+  let res: Response
+  try {
+    res = await fetch(path, {
+      ...rest,
+      headers: {
+        Accept: "application/json",
+        ...(json !== undefined && { "Content-Type": "application/json" }),
+      },
+      body: json !== undefined ? JSON.stringify(json) : rest.body,
+    })
+  } catch (err) {
+    throw new RequestError({ status: 0, message: String(err), fields: [] })
+  }
+  if (!res.ok) throw new RequestError(await readError(res))
+  if (res.status === 204) return undefined as T
+  const type = res.headers.get("Content-Type") ?? ""
+  return (type.includes("json") ? res.json() : res.text()) as Promise<T>
 }
 
 async function readError(res: Response): Promise<ApiError> {
   const text = await res.text()
   try {
-    const body = JSON.parse(text) as {
-      message?: string
-      fields?: FieldProblem[]
-    }
+    const body = JSON.parse(text) as Partial<ApiError>
     return {
       status: res.status,
       message: body.message ?? text,
       fields: body.fields ?? [],
+      output: body.output,
     }
   } catch {
     return {
@@ -44,86 +97,48 @@ async function readError(res: Response): Promise<ApiError> {
   }
 }
 
-export async function generateConfig(
-  config: ConfigJSON
-): Promise<GenerateResult> {
-  try {
-    const res = await fetch("api/generate", {
+export const api = {
+  sites: () =>
+    request<{ sites: StoredSite[] }>("api/sites").then((r) => r.sites),
+  createSite: (config: ServerJSON) =>
+    request<StoredSite>("api/sites", { method: "POST", json: { config } }),
+  updateSite: (id: string, config: ServerJSON) =>
+    request<StoredSite>(`api/sites/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      json: { config },
+    }),
+  deleteSite: (id: string) =>
+    request<void>(`api/sites/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  replaceSites: (configs: ServerJSON[]) =>
+    request<{ sites: StoredSite[] }>("api/sites", {
+      method: "PUT",
+      json: { configs },
+    }).then((r) => r.sites),
+
+  status: () => request<Status>("api/status"),
+  apply: () => request<Status>("api/apply", { method: "POST" }),
+  nginxConf: () => request<string>("api/nginx.conf"),
+
+  certificates: () =>
+    request<{ certificates: Certificate[] }>("api/certificates").then(
+      (r) => r.certificates
+    ),
+  issueCertificate: (domains: string[], dns: string) =>
+    request<{ output: string }>("api/certificates", {
       method: "POST",
-      headers: json,
-      body: JSON.stringify(config),
-    })
-    if (!res.ok) return { ok: false, error: await readError(res) }
-    const body = (await res.json()) as { config: string }
-    return { ok: true, config: body.config }
-  } catch (err) {
-    return {
-      ok: false,
-      error: {
-        status: 0,
-        message: String(err),
-        fields: [],
-      },
-    }
-  }
+      json: { domains, dns },
+    }).then((r) => r.output),
+
+  validate: (config: ConfigJSON, signal?: AbortSignal) =>
+    request<void>("api/validate", { method: "POST", json: config, signal }),
+  example: () => request<string>("api/example"),
 }
 
-// validateConfig returns the problems with config, or null if it is valid.
-// It throws if the server cannot be reached or signal is aborted.
-export async function validateConfig(
-  config: ConfigJSON,
-  signal: AbortSignal
-): Promise<ApiError | null> {
-  const res = await fetch("api/validate", {
-    method: "POST",
-    headers: json,
-    body: JSON.stringify(config),
-    signal,
-  })
-  return res.ok ? null : readError(res)
-}
-
-export type StoredSites = { revision: number; sites: StoredSite[] }
-
-// ConflictError reports that the stored sites were changed by someone else.
-export class ConflictError extends Error {}
-
-export async function fetchSites(): Promise<StoredSites> {
-  const res = await fetch("api/sites", {
-    headers: { Accept: "application/json" },
-  })
-  if (!res.ok) throw new Error((await readError(res)).message)
-  return (await res.json()) as StoredSites
-}
-
-// saveSites stores sites in place of those of the given revision, and
-// returns the new revision.
-export async function saveSites(doc: StoredSites): Promise<number> {
-  const res = await fetch("api/sites", {
-    method: "PUT",
-    headers: json,
-    body: JSON.stringify(doc),
-  })
-  if (res.status === 409)
-    throw new ConflictError((await readError(res)).message)
-  if (!res.ok) throw new Error((await readError(res)).message)
-  const body = (await res.json()) as { revision: number }
-  return body.revision
-}
-
-export async function fetchCertificates(): Promise<string[]> {
-  const res = await fetch("api/certificates", {
-    headers: { Accept: "application/json" },
-  })
-  if (!res.ok) throw new Error((await readError(res)).message)
-  const body = (await res.json()) as { certificates: string[] }
-  return body.certificates
-}
-
-export async function fetchExample(): Promise<string> {
-  const res = await fetch("api/example")
-  if (!res.ok) throw new Error(`loading the example failed: HTTP ${res.status}`)
-  return res.text()
+// errorOf returns the ApiError of a failed request.
+export function errorOf(err: unknown): ApiError {
+  return err instanceof RequestError
+    ? err.error
+    : { status: 0, message: String(err), fields: [] }
 }
 
 export async function copyText(text: string): Promise<void> {

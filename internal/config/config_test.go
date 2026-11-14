@@ -238,11 +238,14 @@ servers:
 	}
 }
 
-func TestParseSyntaxErrorIsNotFieldErrors(t *testing.T) {
-	_, err := config.Parse([]byte("servers: [unclosed"))
-	var errs config.FieldErrors
-	if err == nil || errors.As(err, &errs) {
-		t.Fatalf("Parse error = %v, want a plain YAML error", err)
+func TestParseSyntaxError(t *testing.T) {
+	for _, doc := range []string{"servers: [unclosed", "servers: [{websockets: true}]", ""} {
+		_, err := config.Parse([]byte(doc))
+		var syntax *config.SyntaxError
+		var errs config.FieldErrors
+		if !errors.As(err, &syntax) || errors.As(err, &errs) {
+			t.Errorf("Parse(%q) error = %v, want a *SyntaxError", doc, err)
+		}
 	}
 }
 

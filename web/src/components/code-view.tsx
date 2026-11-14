@@ -51,22 +51,6 @@ export function NginxCode({ text }: { text: string }) {
   })
 }
 
-// YamlCode highlights the keys and comments of a YAML document.
-export function YamlCode({ text }: { text: string }) {
-  return text.split("\n").map((line, i) => {
-    const m = /^(\s*(?:- )?)([\w-]+)(:)(.*)$/.exec(line)
-    if (!m) return <Line key={i}>{line}</Line>
-    const [, indent, key, colon, rest] = m
-    return (
-      <Line key={i} indent={indent}>
-        <span className="text-sky-700 dark:text-sky-400">{key}</span>
-        {colon}
-        {rest}
-      </Line>
-    )
-  })
-}
-
 function Line({ indent, children }: { indent?: string; children: ReactNode }) {
   return (
     <>

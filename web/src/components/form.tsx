@@ -1,4 +1,4 @@
-// Building blocks shared by the builder's steps.
+// Building blocks shared by the pages and dialogs.
 
 import { useState, type ComponentProps, type ReactNode } from "react"
 import { Plus, X } from "lucide-react"
@@ -39,7 +39,7 @@ import { directiveKey, newId, type Directive } from "@/lib/model"
 
 // useDescribe returns the message for a problem reported by the server, or
 // passes a message through.
-function useDescribe() {
+export function useDescribe() {
   const { t } = useI18n()
   return (error?: FieldProblem | string) =>
     typeof error === "string" || error === undefined
@@ -47,7 +47,7 @@ function useDescribe() {
       : describeProblem(t, error)
 }
 
-export function StepHeader({
+export function PageHeader({
   title,
   description,
   actions,
@@ -59,10 +59,10 @@ export function StepHeader({
   return (
     <div className="flex flex-wrap items-end gap-3">
       <div className="mr-auto min-w-0">
-        <h2 className="truncate font-heading text-lg font-semibold">{title}</h2>
+        <h1 className="truncate font-heading text-xl font-semibold">{title}</h1>
         <p className="text-sm text-muted-foreground">{description}</p>
       </div>
-      {actions && <div className="flex gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
     </div>
   )
 }
@@ -132,12 +132,16 @@ export function ToggleCard({
 // DirectiveList edits the raw nginx directives of a server or location.
 export function DirectiveList({
   owner,
+  title,
+  description,
   items,
   onChange,
   problems,
   placeholder,
 }: {
   owner: string // key of the site or route
+  title: ReactNode
+  description: ReactNode
   items: Directive[]
   onChange: (items: Directive[]) => void
   problems: Problems
@@ -155,9 +159,9 @@ export function DirectiveList({
   return (
     <FieldSet className="gap-3">
       <FieldLegend variant="label" className="mb-0">
-        {t.directives.title}
+        {title}
       </FieldLegend>
-      <FieldDescription>{t.directives.text}</FieldDescription>
+      <FieldDescription>{description}</FieldDescription>
       {items.map((d) => {
         const key = directiveKey(owner, d)
         const error = describe(problems.byKey.get(key))
@@ -175,7 +179,7 @@ export function DirectiveList({
                   )
                 }
                 placeholder={placeholder}
-                aria-label={t.directives.label}
+                aria-label={t.site.directive}
                 aria-invalid={error ? true : undefined}
                 autoFocus={d.id === added}
                 autoComplete="off"
@@ -183,7 +187,7 @@ export function DirectiveList({
                 className="font-mono"
               />
               <IconButton
-                label={t.directives.remove}
+                label={t.site.removeDirective}
                 onClick={() => onChange(items.filter((it) => it.id !== d.id))}
               >
                 <X />
@@ -195,7 +199,7 @@ export function DirectiveList({
       })}
       <Button variant="outline" size="sm" className="w-fit" onClick={add}>
         <Plus />
-        {t.directives.add}
+        {t.site.addDirective}
       </Button>
     </FieldSet>
   )
@@ -239,12 +243,21 @@ export function ConfirmButton({
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>{t.confirm.cancel}</AlertDialogCancel>
+          <AlertDialogCancel>{t.app.cancel}</AlertDialogCancel>
           <AlertDialogAction variant="destructive" onClick={onConfirm}>
             {action}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  )
+}
+
+// Output shows the output of a command, such as nginx or acme.sh.
+export function Output({ children }: { children: string }) {
+  return (
+    <pre className="max-h-64 overflow-auto rounded-md bg-muted/60 p-3 font-mono text-xs whitespace-pre-wrap text-foreground">
+      {children}
+    </pre>
   )
 }

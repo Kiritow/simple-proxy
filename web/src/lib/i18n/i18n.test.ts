@@ -65,6 +65,7 @@ test("problem codes match those of the server", () => {
     "unquoted",
     "trailing_backslash",
     "unterminated_quote",
+    "domain_in_use",
     "cert_not_found",
   ]
   for (const [lang, messages] of Object.entries(languages)) {

@@ -152,8 +152,8 @@ func (d *Directive) UnmarshalYAML(node *yaml.Node) error {
 // YAML), fills in inherited defaults and validates the result.
 //
 // Unknown fields are rejected so that typos do not silently change the
-// generated configuration. If the document decodes but is invalid, the error
-// is a FieldErrors. In the returned Config, every Location has its Path and IP
+// generated configuration. If the document does not decode, the error is a
+// *SyntaxError; if it decodes but is invalid, the error is a FieldErrors. In the returned Config, every Location has its Path and IP
 // set, and every enabled Location has a valid Port.
 func Parse(data []byte) (*Config, error) {
 	var cfg Config
@@ -178,14 +178,22 @@ func DecodeServer(data []byte) (*Server, error) {
 	return &s, nil
 }
 
+// SyntaxError reports a document that does not decode into a
+// configuration, e.g. because of a YAML syntax error or an unknown field.
+type SyntaxError struct{ Err error }
+
+func (e *SyntaxError) Error() string { return e.Err.Error() }
+
+func (e *SyntaxError) Unwrap() error { return e.Err }
+
 func decode(data []byte, v any) error {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(v); err != nil {
 		if errors.Is(err, io.EOF) {
-			return errors.New("config is empty")
+			err = errors.New("config is empty")
 		}
-		return err
+		return &SyntaxError{Err: err}
 	}
 	return nil
 }
@@ -253,6 +261,9 @@ const (
 	Unquoted          ProblemCode = "unquoted"
 	TrailingBackslash ProblemCode = "trailing_backslash"
 	UnterminatedQuote ProblemCode = "unterminated_quote"
+	// DomainInUse is not found by Parse, which sees one configuration, but
+	// by checks across sites.
+	DomainInUse ProblemCode = "domain_in_use"
 )
 
 var problemText = map[ProblemCode]string{
@@ -267,6 +278,7 @@ var problemText = map[ProblemCode]string{
 	Unquoted:          "%q must be quoted or escaped",
 	TrailingBackslash: "ends with a backslash",
 	UnterminatedQuote: "has an unterminated quote",
+	DomainInUse:       "%q is used by another site",
 }
 
 // Problem is a validation problem with a field. Value is the offending

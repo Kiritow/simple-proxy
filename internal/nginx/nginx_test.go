@@ -51,6 +51,7 @@ func testCerts() *fakeCerts {
 
 // TestGenerateGolden renders every testdata/*.yaml and compares the result
 // with the matching .conf file. Run "go test -update" to rewrite them.
+// Inputs named acme-*.yaml are rendered with an ACME webroot.
 func TestGenerateGolden(t *testing.T) {
 	inputs, err := filepath.Glob(filepath.Join("testdata", "*.yaml"))
 	if err != nil {
@@ -69,7 +70,11 @@ func TestGenerateGolden(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := newGenerator(testCerts()).Generate(t.Context(), cfg)
+			gen := newGenerator(testCerts())
+			if strings.HasPrefix(filepath.Base(input), "acme-") {
+				gen.ACMEWebroot = "/var/www/acme"
+			}
+			got, err := gen.Generate(t.Context(), cfg)
 			if err != nil {
 				t.Fatal(err)
 			}

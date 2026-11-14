@@ -4,10 +4,8 @@ import { test } from "node:test"
 
 import {
   certCovers,
-  describeKey,
   fromStored,
   ImportError,
-  locate,
   newRoute,
   newSite,
   parseYaml,
@@ -15,8 +13,9 @@ import {
   routeKey,
   serialize,
   siteKey,
-  toStored,
+  toServer,
   toYaml,
+  uncovered,
 } from "./model.ts"
 
 const example = readFileSync(
@@ -117,39 +116,6 @@ test("resolveField maps server error paths to inputs", () => {
   )
   assert.equal(resolveField(owners, "servers[1].server_name"), undefined)
   assert.equal(resolveField(owners, "nonsense"), undefined)
-
-  assert.deepEqual(locate(`${s}.listen_port`), {
-    step: "sites",
-    siteId: site.id,
-  })
-  assert.deepEqual(locate(`${r}.port`), { step: "routes", siteId: site.id })
-})
-
-const labels = {
-  newSite: "New site",
-  defaultRoute: "Default route",
-  newRoute: "New route",
-  directive: "Extra directive",
-  fields: { port: "Port", ip: "Upstream host" },
-}
-
-test("describeKey names the input", () => {
-  const site = newSite()
-  site.serverName = "example.com"
-  const route = newRoute("/api")
-  site.routes = [route]
-  assert.equal(
-    describeKey([site], `${routeKey(site, route)}.port`, labels),
-    "example.com › /api › Port"
-  )
-  assert.equal(
-    describeKey([site], `${routeKey(site, site.root)}.ip`, labels),
-    "example.com › Default route › Upstream host"
-  )
-  assert.equal(
-    describeKey([site], `${siteKey(site)}/d:z`, labels),
-    "example.com › Extra directive"
-  )
 })
 
 test("parseYaml derives HTTPS from cert_name", () => {
@@ -200,19 +166,29 @@ test("certCovers matches exact and single-level wildcard names", () => {
   assert.ok(!certCovers("example.com", "www.example.com"))
 })
 
-test("stored sites keep their IDs and content", () => {
-  const sites = parseYaml(example)
-  const stored = toStored(sites)
-  assert.equal(stored[0].id, sites[0].id)
-  const loaded = fromStored(JSON.parse(JSON.stringify(stored)))
-  assert.equal(loaded[0].id, sites[0].id)
-  assert.deepEqual(toStored(loaded), stored)
+test("uncovered checks every name of the certificate", () => {
+  const cert = ["example.com", "www.example.com", "*.api.example.com"]
+  assert.deepEqual(
+    uncovered(["example.com", "www.example.com", "v1.api.example.com"], cert),
+    []
+  )
+  assert.deepEqual(uncovered(["example.com", "shop.example.com"], cert), [
+    "shop.example.com",
+  ])
 })
 
-test("stored drafts may be incomplete", () => {
+test("stored sites keep their IDs and content", () => {
+  const [site] = parseYaml(example)
+  const stored = { id: "abc", config: toServer(site) }
+  const loaded = fromStored(JSON.parse(JSON.stringify(stored)))
+  assert.equal(loaded.id, "abc")
+  assert.deepEqual(toServer(loaded), stored.config)
+})
+
+test("an incomplete site survives the round trip", () => {
   const draft = newSite() // no domain, no port
   draft.routes = [newRoute()]
-  const [loaded] = fromStored(toStored([draft]))
+  const loaded = fromStored({ id: "x", config: toServer(draft) })
   assert.equal(loaded.serverName, "")
   assert.equal(loaded.root.port, "")
   assert.equal(loaded.routes.length, 1)
