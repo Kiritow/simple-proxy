@@ -30,7 +30,15 @@ export class RequestError extends Error {
 export type StoredSite = {
   id: string
   config: ServerJSON
+  generation: number // counts the changes of config
   problems?: FieldProblem[]
+}
+
+// Preview is what saving a site would change in the nginx configuration.
+export type Preview = {
+  current: string
+  proposed: string
+  generation: number // of the stored site; 0 for a new site
 }
 
 export type Status = {
@@ -102,13 +110,24 @@ export const api = {
     request<{ sites: StoredSite[] }>("api/sites").then((r) => r.sites),
   createSite: (config: ServerJSON) =>
     request<StoredSite>("api/sites", { method: "POST", json: { config } }),
-  updateSite: (id: string, config: ServerJSON) =>
+  // updateSite and deleteSite fail with 409 if the site is no longer at
+  // generation, i.e. someone else changed it.
+  updateSite: (id: string, config: ServerJSON, generation: number) =>
     request<StoredSite>(`api/sites/${encodeURIComponent(id)}`, {
       method: "PUT",
-      json: { config },
+      json: { config, generation },
     }),
-  deleteSite: (id: string) =>
-    request<void>(`api/sites/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  deleteSite: (id: string, generation: number) =>
+    request<void>(
+      `api/sites/${encodeURIComponent(id)}?generation=${generation}`,
+      { method: "DELETE" }
+    ),
+  previewSite: (id: string | null, config: ServerJSON, signal?: AbortSignal) =>
+    request<Preview>("api/sites/preview", {
+      method: "POST",
+      json: { id: id ?? "", config },
+      signal,
+    }),
   replaceSites: (configs: ServerJSON[]) =>
     request<{ sites: StoredSite[] }>("api/sites", {
       method: "PUT",

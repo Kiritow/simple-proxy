@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/kiritow/simple-proxy/internal/acme"
@@ -44,11 +45,12 @@ type Options struct {
 
 // NewHandler returns a handler serving the browser UI at / and this API:
 //
-//	GET    /api/sites         the sites: {"sites": [{"id": "...", "config": {...}}]}
-//	POST   /api/sites         add a site: {"config": {...}}
-//	PUT    /api/sites         replace all sites: {"configs": [{...}]}
-//	PUT    /api/sites/{id}    change a site: {"config": {...}}
-//	DELETE /api/sites/{id}    remove a site
+//	GET    /api/sites          the sites: {"sites": [{"id": "...", "config": {...}, "generation": 1}]}
+//	POST   /api/sites          add a site: {"config": {...}}
+//	PUT    /api/sites          replace all sites: {"configs": [{...}]}
+//	PUT    /api/sites/{id}     change a site: {"config": {...}, "generation": 1}
+//	DELETE /api/sites/{id}     remove a site; ?generation=1
+//	POST   /api/sites/preview  what saving a site would change: {"id": "...", "config": {...}}
 //	GET    /api/status        how configuration is applied to nginx
 //	POST   /api/apply         apply the stored sites again
 //	GET    /api/nginx.conf    the configuration generated from the sites
@@ -61,6 +63,13 @@ type Options struct {
 // A site's config is one entry of servers in the configuration schema, in
 // JSON. Changing sites applies them to nginx; if nginx rejects the result,
 // nothing changes and the response is 502 with nginx's output.
+//
+// A site's generation counts its changes. Changes and deletions based on an
+// outdated generation fail with 409 Conflict, so that concurrent editors do
+// not overwrite each other; without a generation, they always apply. The
+// preview answers {"current": "...", "proposed": "...", "generation": 1}:
+// the configuration before and after saving, and the site's current
+// generation (0 for a new site, whose id is empty).
 //
 // Errors are reported as
 //
@@ -90,6 +99,7 @@ func NewHandler(opts Options) http.Handler {
 	mux.HandleFunc("GET /api/sites", h.listSites)
 	mux.HandleFunc("POST /api/sites", h.createSite)
 	mux.HandleFunc("PUT /api/sites", h.replaceSites)
+	mux.HandleFunc("POST /api/sites/preview", h.previewSite)
 	mux.HandleFunc("PUT /api/sites/{id}", h.updateSite)
 	mux.HandleFunc("DELETE /api/sites/{id}", h.deleteSite)
 	mux.HandleFunc("GET /api/status", h.status)
@@ -144,7 +154,9 @@ func (h *handler) listSites(w http.ResponseWriter, r *http.Request) {
 }
 
 type siteRequest struct {
-	Config json.RawMessage `json:"config"`
+	ID         string          `json:"id"` // for previews
+	Config     json.RawMessage `json:"config"`
+	Generation int64           `json:"generation"`
 }
 
 func (h *handler) createSite(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +177,7 @@ func (h *handler) updateSite(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) || !checkObject(w, req.Config) {
 		return
 	}
-	site, err := h.m.UpdateSite(r.Context(), r.PathValue("id"), req.Config)
+	site, err := h.m.UpdateSite(r.Context(), r.PathValue("id"), req.Generation, req.Config)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -173,8 +185,33 @@ func (h *handler) updateSite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, site)
 }
 
+func (h *handler) previewSite(w http.ResponseWriter, r *http.Request) {
+	var req siteRequest
+	if !decodeJSON(w, r, &req) || !checkObject(w, req.Config) {
+		return
+	}
+	p, err := h.m.Preview(r.Context(), req.ID, req.Config)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"current":    string(p.Current),
+		"proposed":   string(p.Proposed),
+		"generation": p.Generation,
+	})
+}
+
 func (h *handler) deleteSite(w http.ResponseWriter, r *http.Request) {
-	if err := h.m.DeleteSite(r.Context(), r.PathValue("id")); err != nil {
+	var generation int64
+	if g := r.URL.Query().Get("generation"); g != "" {
+		var err error
+		if generation, err = strconv.ParseInt(g, 10, 64); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Message: "generation must be a number"})
+			return
+		}
+	}
+	if err := h.m.DeleteSite(r.Context(), r.PathValue("id"), generation); err != nil {
 		h.fail(w, r, err)
 		return
 	}
@@ -314,6 +351,8 @@ func (h *handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		status = http.StatusBadRequest
 	case errors.Is(err, manager.ErrNotFound):
 		status = http.StatusNotFound
+	case errors.Is(err, manager.ErrConflict):
+		status = http.StatusConflict
 	case errors.As(err, &applyErr):
 		status = http.StatusBadGateway // nginx rejected the configuration
 	default:

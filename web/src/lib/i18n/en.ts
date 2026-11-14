@@ -81,6 +81,8 @@ export const en = {
     savedOnly: (name: string) => `Saved ${name}`,
     removed: (name: string) => `Deleted ${name}`,
     toggleFailed: "The site could not be changed",
+    conflict:
+      "The site was changed in another window. The list has been refreshed.",
     imported: (n: number) => `Imported ${n} ${n === 1 ? "site" : "sites"}`,
   },
   site: {
@@ -148,6 +150,17 @@ export const en = {
     directive: "Directive",
     save: "Save",
     saving: "Saving…",
+    preview: "Changes to nginx",
+    previewEmpty: "Fill in the site to see what it adds to nginx.",
+    previewProblems: "Fix the highlighted fields to see the changes.",
+    previewNoChanges: "Saving changes nothing in nginx.",
+    changedTitle: "This site was changed in another window",
+    changedText:
+      "It was saved after you started editing. Load the saved version, which discards your edits, or keep your edits to overwrite it when you save. The changes shown are against the saved version.",
+    loadSaved: "Load saved version",
+    keepMine: "Keep my edits",
+    deletedTitle: "This site was deleted in another window",
+    deletedText: "Your edits can no longer be saved.",
     fixFields: "Fix the highlighted fields",
     applyFailed: "nginx rejected the configuration",
     applyFailedText: "Nothing was changed. nginx said:",

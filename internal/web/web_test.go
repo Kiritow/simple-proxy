@@ -145,9 +145,17 @@ func TestUpdateAndDelete(t *testing.T) {
 		t.Fatalf("no id in %s: %v", r.Body, err)
 	}
 	run(t, h, []step{
-		{"update", "PUT", "/api/sites/" + id, `{"config": {"server_name": "a.example.com", "default": {"port": 2}}}`, false, 200, `"port":2`},
-		{"listed", "GET", "/api/sites", "", false, 200, `"id":"` + id + `","config":{"server_name":"a.example.com","default":{"port":2}}`},
-		{"delete", "DELETE", "/api/sites/" + id, "", false, 204, ""},
+		{"preview", "POST", "/api/sites/preview", `{"id": "` + id + `", "config": {"server_name": "a.example.com", "default": {"port": 2}}}`, false, 200, `"generation":1,`},
+		{"preview shows the change", "POST", "/api/sites/preview", `{"id": "` + id + `", "config": {"server_name": "a.example.com", "default": {"port": 2}}}`, false, 200, `proxy_pass http://127.0.0.1:2;`},
+		{"preview of a new site", "POST", "/api/sites/preview", `{"config": {"server_name": "b.example.com", "default": {"port": 3}}}`, false, 200, `"generation":0`},
+		{"preview problems", "POST", "/api/sites/preview", `{"config": {"server_name": "A.example.com", "default": {"port": 3}}}`, false, 400, `"code":"domain_in_use"`},
+		{"preview of a missing site", "POST", "/api/sites/preview", `{"id": "nope", "config": {"server_name": "x.example.com"}}`, false, 404, "site not found"},
+		{"update", "PUT", "/api/sites/" + id, `{"config": {"server_name": "a.example.com", "default": {"port": 2}}, "generation": 1}`, false, 200, `"port":2}},"generation":2}`},
+		{"stale update", "PUT", "/api/sites/" + id, `{"config": {"server_name": "a.example.com", "default": {"port": 3}}, "generation": 1}`, false, 409, "changed by someone else"},
+		{"listed", "GET", "/api/sites", "", false, 200, `"id":"` + id + `","config":{"server_name":"a.example.com","default":{"port":2}},"generation":2`},
+		{"stale delete", "DELETE", "/api/sites/" + id + "?generation=1", "", false, 409, "changed by someone else"},
+		{"bad generation", "DELETE", "/api/sites/" + id + "?generation=x", "", false, 400, "generation must be a number"},
+		{"delete", "DELETE", "/api/sites/" + id + "?generation=2", "", false, 204, ""},
 		{"gone", "GET", "/api/sites", "", false, 200, `{"sites":[]}`},
 	})
 }

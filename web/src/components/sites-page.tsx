@@ -123,6 +123,12 @@ export function SitesPage({
       toast.success(done)
     } catch (err) {
       const e = errorOf(err)
+      if (e.status === 409) {
+        toast.error(t.sites.conflict)
+        busy(stored.id, false)
+        onChanged()
+        return
+      }
       toast.error(t.sites.toggleFailed, {
         description:
           e.fields.length > 0
@@ -137,7 +143,12 @@ export function SitesPage({
   const toggle = (stored: StoredSite, site: Site, enabled: boolean) =>
     change(
       stored,
-      () => api.updateSite(stored.id, toServer({ ...site, enabled })),
+      () =>
+        api.updateSite(
+          stored.id,
+          toServer({ ...site, enabled }),
+          stored.generation
+        ),
       status?.applies
         ? t.sites.saved(nameOf(site, t.sites.newSite))
         : t.sites.savedOnly(nameOf(site, t.sites.newSite))
@@ -146,7 +157,7 @@ export function SitesPage({
   const remove = (stored: StoredSite, site: Site) =>
     change(
       stored,
-      () => api.deleteSite(stored.id),
+      () => api.deleteSite(stored.id, stored.generation),
       t.sites.removed(nameOf(site, t.sites.newSite))
     )
 

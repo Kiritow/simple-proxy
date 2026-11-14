@@ -25,6 +25,11 @@ func site(id, config string) store.Site {
 	return store.Site{ID: id, Config: json.RawMessage(config)}
 }
 
+// stored is a site as returned by Sites.
+func stored(id, config string, generation int64) store.Site {
+	return store.Site{ID: id, Config: json.RawMessage(config), Generation: generation}
+}
+
 func sites(t *testing.T, s *store.Store) []store.Site {
 	t.Helper()
 	got, err := s.Sites(t.Context())
@@ -54,11 +59,11 @@ func TestReplaceSites(t *testing.T) {
 
 	// Configs come back minified, in order.
 	want := []store.Site{
-		site("a", `{"server_name":"a.example.com","default":{"port":1}}`),
-		site("b", `{"server_name":"b.example.com"}`),
+		stored("a", `{"server_name":"a.example.com","default":{"port":1}}`, 1),
+		stored("b", `{"server_name":"b.example.com"}`, 1),
 	}
 	if got := sites(t, s); !reflect.DeepEqual(got, want) {
-		t.Errorf("Sites = %s, want %s", got, want)
+		t.Errorf("Sites = %+v, want %+v", got, want)
 	}
 
 	// Reorder, change b, drop a, add c.
@@ -68,17 +73,17 @@ func TestReplaceSites(t *testing.T) {
 		t.Fatal(err)
 	}
 	want = []store.Site{
-		site("c", `{"server_name":"c.example.com"}`),
-		site("b", `{"server_name":"b2.example.com"}`),
+		stored("c", `{"server_name":"c.example.com"}`, 1),
+		stored("b", `{"server_name":"b2.example.com"}`, 2),
 	}
 	if got := sites(t, s); !reflect.DeepEqual(got, want) {
-		t.Errorf("Sites = %s, want %s", got, want)
+		t.Errorf("Sites = %+v, want %+v", got, want)
 	}
 
 	// Everything persists.
 	s.Close()
 	if got := sites(t, open(t, path)); !reflect.DeepEqual(got, want) {
-		t.Errorf("after reopening, Sites = %s, want %s", got, want)
+		t.Errorf("after reopening, Sites = %+v, want %+v", got, want)
 	}
 }
 
@@ -94,7 +99,7 @@ func TestReplaceSitesRejectsBadInput(t *testing.T) {
 		}
 	}
 	if got := sites(t, s); len(got) != 0 {
-		t.Errorf("after failed writes, Sites = %s, want nothing stored", got)
+		t.Errorf("after failed writes, Sites = %+v, want nothing stored", got)
 	}
 }
 
@@ -170,7 +175,38 @@ func TestMigrationDropsRevisions(t *testing.T) {
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_schema WHERE name = 'revision'").Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 || tables != 0 {
-		t.Errorf("schema version %d with %d revision tables, want version 2 without", version, tables)
+	if version != 3 || tables != 0 {
+		t.Errorf("schema version %d with %d revision tables, want version 3 without", version, tables)
+	}
+}
+
+func TestGenerationsCountChanges(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "sites.db"))
+	ctx := t.Context()
+	replace := func(sites ...store.Site) {
+		t.Helper()
+		if err := s.ReplaceSites(ctx, sites); err != nil {
+			t.Fatal(err)
+		}
+	}
+	generations := func() map[string]int64 {
+		t.Helper()
+		got := map[string]int64{}
+		for _, site := range sites(t, s) {
+			got[site.ID] = site.Generation
+		}
+		return got
+	}
+
+	replace(site("a", `{"gzip": true}`), site("b", `{}`))
+	replace(site("a", `{ "gzip" : true }`), site("b", `{"gzip": true}`)) // a is unchanged
+	replace(site("b", `{"gzip": false}`), site("a", `{"gzip": true}`))   // reordered
+	if got := generations(); got["a"] != 1 || got["b"] != 3 {
+		t.Errorf("generations = %v, want a at 1 and b at 3", got)
+	}
+	// Generations given to ReplaceSites are ignored.
+	replace(store.Site{ID: "a", Config: json.RawMessage(`{"gzip": true}`), Generation: 9}, site("b", `{"gzip": false}`))
+	if got := generations(); got["a"] != 1 {
+		t.Errorf("generations = %v, want a still at 1", got)
 	}
 }

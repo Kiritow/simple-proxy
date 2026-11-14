@@ -6,6 +6,7 @@ import {
   type ApiError,
   type Certificate,
   type FieldProblem,
+  type Preview,
   type Status,
   type StoredSite,
 } from "@/lib/api"
@@ -79,27 +80,57 @@ export function toProblems(
   return { byKey }
 }
 
-// useValidation has the server validate site shortly after every change.
-export function useValidation(site: Site | null): Problems {
-  const [problems, setProblems] = useState<Problems>(noProblems)
+export type PreviewState = {
+  preview: Preview | null // of the last successful request
+  error: ApiError | null // of the last request
+  problems: Problems // with site, from error
+  loading: boolean
+}
+
+// usePreview has the server preview saving site, the site with the given
+// ID or a new one, shortly after every change, and every few seconds to
+// notice changes made elsewhere.
+export function usePreview(site: Site, id: string | null): PreviewState {
+  const [state, setState] = useState<PreviewState>({
+    preview: null,
+    error: null,
+    problems: noProblems,
+    loading: true,
+  })
+  const [polls, setPolls] = useState(0)
+
   useEffect(() => {
-    if (!site) return
     const abort = new AbortController()
     const timer = setTimeout(() => {
+      setState((s) => ({ ...s, loading: true }))
       const { config, owners } = serialize([site])
-      api.validate(config, abort.signal).then(
-        () => setProblems(noProblems),
+      api.previewSite(id, config.servers[0], abort.signal).then(
+        (preview) =>
+          setState({
+            preview,
+            error: null,
+            problems: noProblems,
+            loading: false,
+          }),
         (err: unknown) => {
-          if (!abort.signal.aborted) {
-            setProblems(toProblems(errorOf(err), owners))
-          }
+          if (abort.signal.aborted) return
+          const error = errorOf(err)
+          setState((s) => ({
+            preview: s.preview,
+            error,
+            problems: toProblems(error, owners),
+            loading: false,
+          }))
         }
       )
-    }, 400)
+    }, 300)
+    const poll = setTimeout(() => setPolls((n) => n + 1), 5000)
     return () => {
       clearTimeout(timer)
+      clearTimeout(poll)
       abort.abort()
     }
-  }, [site])
-  return problems
+  }, [site, id, polls])
+
+  return state
 }

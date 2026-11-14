@@ -25,6 +25,9 @@ import (
 var (
 	// ErrNotFound reports that a site does not exist.
 	ErrNotFound = errors.New("site not found")
+	// ErrConflict reports a change based on an outdated generation of a
+	// site, which someone else changed in the meantime.
+	ErrConflict = errors.New("the site was changed by someone else")
 	// ErrNoCA reports that certificates cannot be managed.
 	ErrNoCA = errors.New("certificates are not available: acme.sh is not configured")
 	// ErrNoWebroot reports that HTTP validation is not configured.
@@ -161,17 +164,22 @@ func (m *Manager) CreateSite(ctx context.Context, cfg json.RawMessage) (store.Si
 		}
 		return append(sites, site), nil
 	})
-	return site, err
+	if err != nil {
+		return store.Site{}, err
+	}
+	return m.stored(ctx, site.ID)
 }
 
 // UpdateSite changes the configuration of a site, reporting problems like
-// CreateSite.
-func (m *Manager) UpdateSite(ctx context.Context, id string, cfg json.RawMessage) (store.Site, error) {
+// CreateSite. The change is based on the given generation of the site; if
+// the site has changed since, UpdateSite fails with ErrConflict. A
+// generation of 0 changes the site whatever its generation.
+func (m *Manager) UpdateSite(ctx context.Context, id string, generation int64, cfg json.RawMessage) (store.Site, error) {
 	site := store.Site{ID: id, Config: cfg}
 	err := m.change(ctx, func(sites []store.Site) ([]store.Site, error) {
-		i := slices.IndexFunc(sites, func(s store.Site) bool { return s.ID == id })
-		if i < 0 {
-			return nil, ErrNotFound
+		i, err := find(sites, id, generation)
+		if err != nil {
+			return nil, err
 		}
 		others := slices.Delete(slices.Clone(sites), i, i+1)
 		if err := m.checkSite(ctx, site, others); err != nil {
@@ -180,17 +188,96 @@ func (m *Manager) UpdateSite(ctx context.Context, id string, cfg json.RawMessage
 		sites[i] = site
 		return sites, nil
 	})
-	return site, err
+	if err != nil {
+		return store.Site{}, err
+	}
+	return m.stored(ctx, id)
 }
 
-func (m *Manager) DeleteSite(ctx context.Context, id string) error {
+// DeleteSite removes a site, if it is still at the given generation, like
+// UpdateSite.
+func (m *Manager) DeleteSite(ctx context.Context, id string, generation int64) error {
 	return m.change(ctx, func(sites []store.Site) ([]store.Site, error) {
-		i := slices.IndexFunc(sites, func(s store.Site) bool { return s.ID == id })
-		if i < 0 {
-			return nil, ErrNotFound
+		i, err := find(sites, id, generation)
+		if err != nil {
+			return nil, err
 		}
 		return slices.Delete(sites, i, i+1), nil
 	})
+}
+
+// find returns the index of the site with the given ID, checking that it is
+// at the given generation unless that is 0.
+func find(sites []store.Site, id string, generation int64) (int, error) {
+	i := slices.IndexFunc(sites, func(s store.Site) bool { return s.ID == id })
+	switch {
+	case i < 0:
+		return 0, ErrNotFound
+	case generation != 0 && sites[i].Generation != generation:
+		return 0, fmt.Errorf("%w: it is at generation %d, not %d", ErrConflict, sites[i].Generation, generation)
+	}
+	return i, nil
+}
+
+// stored returns the stored site with the given ID.
+func (m *Manager) stored(ctx context.Context, id string) (store.Site, error) {
+	sites, err := m.opts.Store.Sites(ctx)
+	if err != nil {
+		return store.Site{}, err
+	}
+	i := slices.IndexFunc(sites, func(s store.Site) bool { return s.ID == id })
+	if i < 0 {
+		return store.Site{}, ErrNotFound
+	}
+	return sites[i], nil
+}
+
+// Preview shows what saving a site would change in the configuration.
+type Preview struct {
+	// Current and Proposed are the configuration before and after saving,
+	// generated at the same time.
+	Current, Proposed []byte
+	// Generation is the site's current generation; 0 for a new site.
+	Generation int64
+}
+
+// Preview checks a site like CreateSite, if id is empty, or UpdateSite, and
+// returns what saving it would change, without changing anything. Unlike
+// UpdateSite, it does not check generations, but reports the current one.
+func (m *Manager) Preview(ctx context.Context, id string, cfg json.RawMessage) (Preview, error) {
+	sites, err := m.opts.Store.Sites(ctx)
+	if err != nil {
+		return Preview{}, err
+	}
+	site := store.Site{ID: id, Config: cfg}
+	next := slices.Clone(sites)
+	var p Preview
+	if id == "" {
+		if err := m.checkSite(ctx, site, sites); err != nil {
+			return Preview{}, err
+		}
+		next = append(next, site)
+	} else {
+		i, err := find(sites, id, 0)
+		if err != nil {
+			return Preview{}, err
+		}
+		p.Generation = sites[i].Generation
+		others := slices.Delete(slices.Clone(sites), i, i+1)
+		if err := m.checkSite(ctx, site, others); err != nil {
+			return Preview{}, err
+		}
+		next[i] = site
+	}
+
+	now := time.Now()
+	if p.Current, err = m.renderAt(ctx, sites, now); err != nil {
+		return Preview{}, err
+	}
+	if p.Proposed, err = m.renderAt(ctx, next, now); err != nil {
+		return Preview{}, err
+	}
+	return p, nil
 }
 
 // ReplaceSites replaces all sites with new ones with the given
@@ -216,7 +303,10 @@ func (m *Manager) ReplaceSites(ctx context.Context, configs []json.RawMessage) (
 		}
 		return sites, nil
 	})
-	return sites, err
+	if err != nil {
+		return nil, err
+	}
+	return m.opts.Store.Sites(ctx)
 }
 
 // change replaces the stored sites with those returned by edit, after
@@ -290,6 +380,11 @@ func (m *Manager) NginxConfig(ctx context.Context) ([]byte, error) {
 
 // render generates the configuration of the valid sites.
 func (m *Manager) render(ctx context.Context, sites []store.Site) ([]byte, error) {
+	return m.renderAt(ctx, sites, time.Now())
+}
+
+// renderAt is render, with the time written into the configuration.
+func (m *Manager) renderAt(ctx context.Context, sites []store.Site, now time.Time) ([]byte, error) {
 	valid := slices.DeleteFunc(slices.Clone(sites), func(s store.Site) bool {
 		_, err := parse([]store.Site{s})
 		return err != nil
@@ -298,7 +393,9 @@ func (m *Manager) render(ctx context.Context, sites []store.Site) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	conf, err := m.opts.Generator.Generate(ctx, cfg)
+	gen := *m.opts.Generator
+	gen.Now = func() time.Time { return now }
+	conf, err := gen.Generate(ctx, cfg)
 	if err != nil {
 		// Paths into the combined configuration mean nothing to callers, so
 		// do not wrap the error: the message names the certificate.

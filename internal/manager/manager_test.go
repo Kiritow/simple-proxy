@@ -128,7 +128,7 @@ func TestCreateUpdateDelete(t *testing.T) {
 		t.Errorf("Status = %+v, want applied", st)
 	}
 
-	if _, err := e.m.UpdateSite(ctx, a.ID, site("a.example.com", 4000)); err != nil {
+	if _, err := e.m.UpdateSite(ctx, a.ID, a.Generation, site("a.example.com", 4000)); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(e.nginxConf(t), "proxy_pass http://127.0.0.1:4000;") {
@@ -138,7 +138,7 @@ func TestCreateUpdateDelete(t *testing.T) {
 		t.Fatalf("stored %v, want the updated site", got)
 	}
 
-	if err := e.m.DeleteSite(ctx, a.ID); err != nil {
+	if err := e.m.DeleteSite(ctx, a.ID, 0); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(e.nginxConf(t), "a.example.com") || len(e.stored(t)) != 0 {
@@ -150,8 +150,8 @@ func TestCreateUpdateDelete(t *testing.T) {
 	}
 
 	for _, err := range []error{
-		e.m.DeleteSite(ctx, "missing"),
-		func() error { _, err := e.m.UpdateSite(ctx, "missing", site("x.example.com", 1)); return err }(),
+		e.m.DeleteSite(ctx, "missing", 0),
+		func() error { _, err := e.m.UpdateSite(ctx, "missing", 0, site("x.example.com", 1)); return err }(),
 	} {
 		if !errors.Is(err, manager.ErrNotFound) {
 			t.Errorf("error = %v, want ErrNotFound", err)
@@ -214,7 +214,7 @@ func TestDisabledSitesMayShareDomains(t *testing.T) {
 		t.Fatalf("a disabled site was rejected: %v", err)
 	}
 	// Enabling it conflicts.
-	_, err = e.m.UpdateSite(ctx, b.ID, site("a.example.com", 4000))
+	_, err = e.m.UpdateSite(ctx, b.ID, b.Generation, site("a.example.com", 4000))
 	if got := fields(err); len(got) != 1 || !strings.Contains(got[0], "is used by another site") {
 		t.Errorf("enabling a duplicate: %v", err)
 	}
@@ -335,5 +335,88 @@ func TestIssueCertificateWithoutWebroot(t *testing.T) {
 	m := manager.New(manager.Options{Store: s, Generator: &nginx.Generator{}, CA: &fakeCA{}})
 	if _, err := m.IssueCertificate(t.Context(), []string{"a.example.com"}, ""); !errors.Is(err, manager.ErrNoWebroot) {
 		t.Errorf("error = %v, want ErrNoWebroot", err)
+	}
+}
+
+func TestGenerations(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	a, err := e.m.CreateSite(ctx, site("a.example.com", 3000))
+	if err != nil || a.Generation != 1 {
+		t.Fatalf("CreateSite = %+v, %v; want generation 1", a, err)
+	}
+
+	// Two windows opened a at generation 1. The first one saves...
+	first, err := e.m.UpdateSite(ctx, a.ID, 1, site("a.example.com", 3001))
+	if err != nil || first.Generation != 2 {
+		t.Fatalf("UpdateSite = %+v, %v; want generation 2", first, err)
+	}
+	// ...and the second one cannot overwrite it, nor delete the site.
+	if _, err := e.m.UpdateSite(ctx, a.ID, 1, site("a.example.com", 3002)); !errors.Is(err, manager.ErrConflict) {
+		t.Errorf("stale UpdateSite error = %v, want ErrConflict", err)
+	}
+	if err := e.m.DeleteSite(ctx, a.ID, 1); !errors.Is(err, manager.ErrConflict) {
+		t.Errorf("stale DeleteSite error = %v, want ErrConflict", err)
+	}
+	if !strings.Contains(e.nginxConf(t), "127.0.0.1:3001") {
+		t.Error("a stale change was applied")
+	}
+
+	// Saving an unchanged site keeps its generation.
+	same, err := e.m.UpdateSite(ctx, a.ID, 2, site("a.example.com", 3001))
+	if err != nil || same.Generation != 2 {
+		t.Errorf("unchanged UpdateSite = %+v, %v; want generation 2", same, err)
+	}
+	// Generation 0 overwrites whatever is stored.
+	if _, err := e.m.UpdateSite(ctx, a.ID, 0, site("a.example.com", 3003)); err != nil {
+		t.Errorf("unconditional UpdateSite: %v", err)
+	}
+	if err := e.m.DeleteSite(ctx, a.ID, 3); err != nil {
+		t.Errorf("DeleteSite at the current generation: %v", err)
+	}
+}
+
+func TestPreview(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	a, err := e.m.CreateSite(ctx, site("a.example.com", 3000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := e.nginxConf(t)
+
+	p, err := e.m.Preview(ctx, a.ID, site("a.example.com", 4000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Generation != 1 {
+		t.Errorf("Generation = %d, want 1", p.Generation)
+	}
+	cur, prop := string(p.Current), string(p.Proposed)
+	if !strings.Contains(cur, "127.0.0.1:3000") || !strings.Contains(prop, "127.0.0.1:4000") || strings.Contains(prop, "127.0.0.1:3000") {
+		t.Errorf("preview does not show the change:\n%s\n---\n%s", cur, prop)
+	}
+	// Both are generated at the same time, so only the change differs.
+	if strings.Replace(cur, "3000", "4000", 1) != prop {
+		t.Errorf("the preview differs in more than the change:\n%s\n---\n%s", cur, prop)
+	}
+
+	// A new site.
+	p, err = e.m.Preview(ctx, "", site("b.example.com", 5000))
+	if err != nil || p.Generation != 0 || !strings.Contains(string(p.Proposed), "server_name b.example.com;") || strings.Contains(string(p.Current), "b.example.com") {
+		t.Errorf("new site preview = %+v, %v", p, err)
+	}
+
+	// Problems are found like when saving, domain conflicts included.
+	if _, err := e.m.Preview(ctx, "", site("A.example.com", 1)); len(fields(err)) != 1 || !strings.Contains(fields(err)[0], "is used by another site") {
+		t.Errorf("conflicting preview error = %v", err)
+	}
+	if _, err := e.m.Preview(ctx, "missing", site("x.example.com", 1)); !errors.Is(err, manager.ErrNotFound) {
+		t.Errorf("preview of a missing site: %v, want ErrNotFound", err)
+	}
+
+	// Nothing was changed.
+	if e.nginxConf(t) != before || len(e.stored(t)) != 1 {
+		t.Error("Preview changed something")
 	}
 }

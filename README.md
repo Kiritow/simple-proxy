@@ -9,10 +9,16 @@ forward them to), and saving applies it to nginx right away.
 - **HTTPS:** pick a certificate managed by acme.sh, or request a new one from
   the UI (HTTP-01 through nginx, or DNS-01 with an acme.sh DNS API). acme.sh
   renews certificates and reloads nginx.
-- **Safe changes:** every change is tested with `nginx -t` before nginx
-  reloads. If nginx rejects it, nothing changes, and the UI shows nginx's
-  output. Problems such as invalid ports or domains used by another site are
-  shown next to the inputs.
+- **Safe changes:** while you edit a site, a panel shows what saving would
+  change in the nginx configuration, as a diff. Problems such as invalid
+  ports, domains used by another site or missing certificates are shown next
+  to the inputs as you type. Every change is tested with `nginx -t` before
+  nginx reloads; if nginx rejects it, nothing changes, and the UI shows
+  nginx's output.
+- **Concurrent editing:** each site has a generation, which counts its
+  changes. If another window saves or deletes a site you are editing, you
+  are told right away, and can load the saved version or keep your edits
+  and overwrite it; saving never overwrites someone else's change unknowingly.
 - **Import/export:** `config.yaml` files of legacy-proxy-generator can be
   imported, and the sites exported in the same format.
 - English and Chinese, following the browser's language.
@@ -132,10 +138,11 @@ The console is built on this API, which scripts can use as well. A site's
 
 | Request                   | Response |
 | ------------------------- | -------- |
-| `GET /api/sites`          | `{"sites": [{"id": "...", "config": {...}}]}` |
+| `GET /api/sites`          | `{"sites": [{"id": "...", "config": {...}, "generation": 1}]}` |
 | `POST /api/sites`         | Add a site: `{"config": {...}}`. |
-| `PUT /api/sites/{id}`     | Change a site: `{"config": {...}}`. |
-| `DELETE /api/sites/{id}`  | Remove a site. |
+| `PUT /api/sites/{id}`     | Change a site: `{"config": {...}, "generation": 1}`. |
+| `DELETE /api/sites/{id}`  | Remove a site: `?generation=1`. |
+| `POST /api/sites/preview` | What saving a site would change, without saving it: `{"id": "...", "config": {...}}` (no `id` for a new site) gives `{"current": "...", "proposed": "...", "generation": 1}`. |
 | `PUT /api/sites`          | Replace all sites: `{"configs": [{...}]}`. |
 | `GET /api/status`         | How sites are applied to nginx, and the last error. |
 | `POST /api/apply`         | Apply the stored sites again. |
@@ -145,8 +152,11 @@ The console is built on this API, which scripts can use as well. A site's
 | `POST /api/generate`      | The configuration generated from a YAML or JSON configuration, without storing anything. |
 | `POST /api/validate`      | `204` if the configuration in the body is valid. |
 
-Changes respond `400` for invalid sites, `422` for missing certificates, and
-`502` with nginx's output if nginx rejects the configuration. Errors are JSON:
+Changes and deletions carry the generation of the site they are based on,
+and fail with `409` if the site has changed since; without a generation they
+always apply. Changes respond `400` for invalid sites, `422` for missing
+certificates, and `502` with nginx's output if nginx rejects the
+configuration. Errors are JSON:
 
 ```json
 {"message": "...", "output": "nginx: [emerg] ...",

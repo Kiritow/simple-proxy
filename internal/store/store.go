@@ -17,6 +17,10 @@ type Site struct {
 	// Config is the site as one entry of servers in the configuration
 	// schema, in JSON.
 	Config json.RawMessage `json:"config"`
+	// Generation counts the changes of Config, starting at 1, so that
+	// changes based on an outdated version of the site can be detected. It
+	// is maintained by the Store, and ignored by ReplaceSites.
+	Generation int64 `json:"generation"`
 }
 
 // Store is a database of sites. It is safe for concurrent use.
@@ -67,6 +71,9 @@ var migrations = [][]string{
 		// Sites are changed one at a time now, so revisions are not needed.
 		`DROP TABLE revision`,
 	},
+	{
+		`ALTER TABLE sites ADD COLUMN generation INTEGER NOT NULL DEFAULT 1`,
+	},
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -102,7 +109,7 @@ func (s *Store) migrate(ctx context.Context) error {
 
 // Sites returns the stored sites in order.
 func (s *Store) Sites(ctx context.Context) ([]Site, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, config FROM sites ORDER BY position")
+	rows, err := s.db.QueryContext(ctx, "SELECT id, config, generation FROM sites ORDER BY position")
 	if err != nil {
 		return nil, err
 	}
@@ -110,18 +117,20 @@ func (s *Store) Sites(ctx context.Context) ([]Site, error) {
 
 	sites := []Site{}
 	for rows.Next() {
-		var id, config string
-		if err := rows.Scan(&id, &config); err != nil {
+		var site Site
+		var config string
+		if err := rows.Scan(&site.ID, &config, &site.Generation); err != nil {
 			return nil, err
 		}
-		sites = append(sites, Site{ID: id, Config: json.RawMessage(config)})
+		site.Config = json.RawMessage(config)
+		sites = append(sites, site)
 	}
 	return sites, rows.Err()
 }
 
 // ReplaceSites stores sites, in this order, in place of the current ones.
-// Sites keep their creation time, and their update time unless their
-// configuration changed.
+// Sites keep their creation time, and their update time and generation
+// unless their configuration changed.
 func (s *Store) ReplaceSites(ctx context.Context, sites []Site) error {
 	ids := make([]string, len(sites))
 	seen := make(map[string]bool, len(sites))
@@ -153,7 +162,8 @@ func (s *Store) ReplaceSites(ctx context.Context, sites []Site) error {
 			ON CONFLICT (id) DO UPDATE SET
 				position = excluded.position,
 				config = excluded.config,
-				updated_at = iif(config = excluded.config, updated_at, excluded.updated_at)`,
+				updated_at = iif(config = excluded.config, updated_at, excluded.updated_at),
+				generation = iif(config = excluded.config, generation, generation + 1)`,
 			site.ID, i, string(site.Config), now)
 		if err != nil {
 			return fmt.Errorf("storing site %q: %w", site.ID, err)
