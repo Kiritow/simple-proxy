@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -30,7 +31,10 @@ type Site struct {
 
 // Cert is a certificate kept by simple-proxy, as opposed to acme.sh.
 type Cert struct {
-	// Name identifies the certificate; sites refer to it by name.
+	// ID identifies the certificate for good, see NewID, while its Name may
+	// change.
+	ID string
+	// Name is unique too; sites refer to the certificate by name.
 	Name string
 	// CertPEM is the certificate chain, and KeyPEM its private key.
 	CertPEM, KeyPEM []byte
@@ -47,7 +51,8 @@ type Cert struct {
 
 // Authority is a certificate authority (CA) that signs certificates.
 type Authority struct {
-	Name            string
+	ID              string // like Cert's
+	Name            string // unique; certificates refer to their CA by name
 	CertPEM, KeyPEM []byte
 	CreatedAt       time.Time // maintained by the Store
 }
@@ -58,6 +63,20 @@ var (
 	// ErrNotFound reports that a CA does not exist.
 	ErrNotFound = errors.New("not found")
 )
+
+// NewID returns a new ID for a certificate or a CA: a random UUID (version
+// 4), such as "0b5c2fd4-5d6e-4b8a-9f3e-3c1d2a7b9e10".
+func NewID() string {
+	var b [16]byte
+	rand.Read(b[:])
+	b[6] = b[6]&0x0f | 0x40 // version 4
+	b[8] = b[8]&0x3f | 0x80 // RFC 9562 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+// sqlNewID is NewID in SQL, for the rows that predate IDs.
+const sqlNewID = `lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)), 2) || '-' ||
+	substr('89ab', 1 + (random() & 3), 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6)))`
 
 // Store is a database of sites. It is safe for concurrent use.
 type Store struct {
@@ -133,6 +152,36 @@ var migrations = [][]string{
 			key        TEXT NOT NULL,
 			created_at TEXT NOT NULL
 		) STRICT`,
+	},
+	{
+		// Certificates and CAs get IDs, so that they can be renamed.
+		`CREATE TABLE certificates_v5 (
+			id         TEXT PRIMARY KEY,
+			name       TEXT NOT NULL UNIQUE,
+			cert       TEXT NOT NULL,
+			key        TEXT NOT NULL,
+			ca         TEXT NOT NULL,
+			key_type   TEXT NOT NULL,
+			days       INTEGER NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		) STRICT`,
+		`INSERT INTO certificates_v5
+			SELECT ` + sqlNewID + `, name, cert, key, ca, key_type, days, created_at, updated_at
+			FROM certificates`,
+		`DROP TABLE certificates`,
+		`ALTER TABLE certificates_v5 RENAME TO certificates`,
+		`CREATE TABLE authorities_v5 (
+			id         TEXT PRIMARY KEY,
+			name       TEXT NOT NULL UNIQUE,
+			cert       TEXT NOT NULL,
+			key        TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		) STRICT`,
+		`INSERT INTO authorities_v5
+			SELECT ` + sqlNewID + `, name, cert, key, created_at FROM authorities`,
+		`DROP TABLE authorities`,
+		`ALTER TABLE authorities_v5 RENAME TO authorities`,
 	},
 }
 
@@ -258,7 +307,7 @@ func replaceSites(ctx context.Context, tx *sql.Tx, sites []Site) error {
 // Certs returns the stored certificates, by name.
 func (s *Store) Certs(ctx context.Context) ([]Cert, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT name, cert, key, ca, key_type, days, created_at, updated_at
+		SELECT id, name, cert, key, ca, key_type, days, created_at, updated_at
 		FROM certificates ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -269,7 +318,7 @@ func (s *Store) Certs(ctx context.Context) ([]Cert, error) {
 	for rows.Next() {
 		var c Cert
 		var cert, key, created, updated string
-		if err := rows.Scan(&c.Name, &cert, &key, &c.CA, &c.KeyType, &c.Days, &created, &updated); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &cert, &key, &c.CA, &c.KeyType, &c.Days, &created, &updated); err != nil {
 			return nil, err
 		}
 		c.CertPEM, c.KeyPEM = []byte(cert), []byte(key)
@@ -280,50 +329,61 @@ func (s *Store) Certs(ctx context.Context) ([]Cert, error) {
 	return certs, rows.Err()
 }
 
-// ReplaceCerts stores certs in place of the current certificates.
-// Certificates keep their creation time, and their update time unless their
-// contents changed.
+// ReplaceCerts stores certs in place of the current certificates, which
+// they replace by ID: a certificate keeps its creation time, and its update
+// time unless its contents changed, also when it is renamed.
 func (s *Store) ReplaceCerts(ctx context.Context, certs []Cert) error {
 	return s.inTx(ctx, func(tx *sql.Tx) error { return replaceCerts(ctx, tx, certs) })
 }
 
 func replaceCerts(ctx context.Context, tx *sql.Tx, certs []Cert) error {
+	ids := make([]string, len(certs))
 	names := make([]string, len(certs))
 	for i, c := range certs {
-		if slices.Contains(names[:i], c.Name) {
+		switch {
+		case c.ID == "":
+			return fmt.Errorf("certificate %q has no ID", c.Name)
+		case slices.Contains(ids[:i], c.ID):
+			return fmt.Errorf("duplicate certificate ID %q", c.ID)
+		case slices.Contains(names[:i], c.Name):
 			return fmt.Errorf("duplicate certificate %q", c.Name)
 		}
-		names[i] = c.Name
+		ids[i], names[i] = c.ID, c.Name
 	}
-	nameList, err := json.Marshal(names)
+	idList, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	// Deleting first frees the names of deleted certificates for the others.
+	_, err = tx.ExecContext(ctx,
+		"DELETE FROM certificates WHERE id NOT IN (SELECT value FROM json_each(?))", string(idList))
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, c := range certs {
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO certificates (name, cert, key, ca, key_type, days, created_at, updated_at)
-			VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
-			ON CONFLICT (name) DO UPDATE SET
+			INSERT INTO certificates (id, name, cert, key, ca, key_type, days, created_at, updated_at)
+			VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+			ON CONFLICT (id) DO UPDATE SET
 				updated_at = iif(cert = excluded.cert AND key = excluded.key, updated_at, excluded.updated_at),
+				name = excluded.name,
 				cert = excluded.cert,
 				key = excluded.key,
 				ca = excluded.ca,
 				key_type = excluded.key_type,
 				days = excluded.days`,
-			c.Name, string(c.CertPEM), string(c.KeyPEM), c.CA, c.KeyType, c.Days, now)
+			c.ID, c.Name, string(c.CertPEM), string(c.KeyPEM), c.CA, c.KeyType, c.Days, now)
 		if err != nil {
 			return fmt.Errorf("storing certificate %q: %w", c.Name, err)
 		}
 	}
-	_, err = tx.ExecContext(ctx,
-		"DELETE FROM certificates WHERE name NOT IN (SELECT value FROM json_each(?))", string(nameList))
-	return err
+	return nil
 }
 
 // Authorities returns the stored CAs, by name.
 func (s *Store) Authorities(ctx context.Context) ([]Authority, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT name, cert, key, created_at FROM authorities ORDER BY name")
+	rows, err := s.db.QueryContext(ctx, "SELECT id, name, cert, key, created_at FROM authorities ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +393,7 @@ func (s *Store) Authorities(ctx context.Context) ([]Authority, error) {
 	for rows.Next() {
 		var a Authority
 		var cert, key, created string
-		if err := rows.Scan(&a.Name, &cert, &key, &created); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &cert, &key, &created); err != nil {
 			return nil, err
 		}
 		a.CertPEM, a.KeyPEM = []byte(cert), []byte(key)
@@ -343,13 +403,16 @@ func (s *Store) Authorities(ctx context.Context) ([]Authority, error) {
 	return cas, rows.Err()
 }
 
-// AddAuthority stores a new CA. If one of the same name exists, it fails
-// with ErrExists.
+// AddAuthority stores a new CA, which needs an ID from NewID. If one of the
+// same name exists, it fails with ErrExists.
 func (s *Store) AddAuthority(ctx context.Context, a Authority) error {
+	if a.ID == "" {
+		return fmt.Errorf("CA %q has no ID", a.Name)
+	}
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO authorities (name, cert, key, created_at) VALUES (?, ?, ?, ?)
+		INSERT INTO authorities (id, name, cert, key, created_at) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (name) DO NOTHING`,
-		a.Name, string(a.CertPEM), string(a.KeyPEM), time.Now().UTC().Format(time.RFC3339))
+		a.ID, a.Name, string(a.CertPEM), string(a.KeyPEM), time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return err
 	}
@@ -374,4 +437,31 @@ func (s *Store) DeleteAuthority(ctx context.Context, name string) error {
 		return fmt.Errorf("CA %q: %w", name, ErrNotFound)
 	}
 	return nil
+}
+
+// RenameAuthority renames a CA, and changes the certificates it signed to
+// refer to it by its new name. If there is no CA of that name, it fails with
+// ErrNotFound, and if another CA has the new name, with ErrExists.
+func (s *Store) RenameAuthority(ctx context.Context, name, newName string) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		var taken bool
+		err := tx.QueryRowContext(ctx, "SELECT count(*) > 0 FROM authorities WHERE name = ?", newName).Scan(&taken)
+		if err != nil {
+			return err
+		}
+		if taken && newName != name {
+			return fmt.Errorf("CA %q: %w", newName, ErrExists)
+		}
+		res, err := tx.ExecContext(ctx, "UPDATE authorities SET name = ? WHERE name = ?", newName, name)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return fmt.Errorf("CA %q: %w", name, ErrNotFound)
+		}
+		_, err = tx.ExecContext(ctx, "UPDATE certificates SET ca = ? WHERE ca = ?", newName, name)
+		return err
+	})
 }

@@ -96,6 +96,10 @@ export function App() {
             certs={certs}
             authorities={authorities}
             status={status.data}
+            onSitesChanged={() => {
+              sites.reload()
+              status.reload()
+            }}
           />
         ) : (
           <SitesPage

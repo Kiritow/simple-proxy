@@ -106,6 +106,16 @@ unencrypted PKCS #1, PKCS #8 or SEC 1 keys, in the same text or separately.
 Signed certificates use a new ECDSA P-256 or RSA 2048 key, and the CA's
 chain without its root.
 
+Certificates and CAs added here also get an ID, a UUID that stays the same
+when they are renamed or replaced; the lists show its start, and copy all of
+it on click. Their details (ID, serial number, SHA-256 fingerprint, validity,
+chain, the sites using them, and the files nginx reads) open from the lists.
+Renaming a certificate changes the sites using it, by `cert_name` or by
+default, to refer to it by its new name, so they keep serving it; renaming a
+CA does the same for the certificates it signed, so it can still renew them.
+acme.sh's certificates show their details too, read from acme.sh's files, but
+keep the names acme.sh gives them.
+
 ### Docker image
 
 The [Dockerfile](Dockerfile) builds an image running simple-proxy and nginx
@@ -223,14 +233,18 @@ The console is built on this API, which scripts can use as well. A site's
 | `GET /api/status`         | How sites are applied to nginx, and the last error. |
 | `POST /api/apply`         | Apply the stored sites again. |
 | `GET /api/nginx.conf`     | The configuration generated from the sites. |
-| `GET /api/certificates`   | All certificates: `{"certificates": [{"name": "...", "source": "acme", ...}], "acme_error": "..."}`, where `source` is `acme`, `uploaded` or `signed`. |
+| `GET /api/certificates`   | All certificates: `{"certificates": [{"id": "...", "name": "...", "source": "uploaded", ...}], "acme_error": "..."}`, where `source` is `acme`, `uploaded` or `signed`; acme.sh's have no `id`. |
+| `GET /api/certificates/{name}` | One in full: its list entry with `subject`, `not_before`, `serial`, `sha256`, `chain`, `cert_file`, `key_file` and the `sites` using it (`[{"id": "...", "name": "...", "enabled": true}]`). |
+| `PATCH /api/certificates/{name}` | Rename an uploaded or signed one: `{"name": "..."}`. Sites using it follow. |
 | `POST /api/certificates`  | Request one from acme.sh: `{"domains": ["example.com"], "dns": "dns_cf"}`; without `dns`, over HTTP. |
 | `POST /api/certificates/upload` | Upload one: `{"name": "...", "cert": "PEM", "key": "PEM", "replace": false}`; without `name`, it is named after its first domain. |
 | `POST /api/certificates/sign` | Have a CA sign one: `{"authority": "...", "domains": ["nas.lan"], "days": 365, "key_type": "ec", "name": "...", "replace": false}`; `key_type` is `ec` or `rsa`. |
 | `POST /api/certificates/upload/preview`, `/sign/preview` | What uploading or signing would store, without storing it: `{"name": "...", "subject": "...", "issuer": "...", "domains": [...], "not_after": "...", "chain": [...], "has_key": true, "problems": [...]}`, as far as it can be read, with the problems that would make it fail. |
 | `DELETE /api/certificates/{name}` | Delete an uploaded or signed certificate that no enabled site uses. |
-| `GET /api/authorities`    | The CAs: `{"authorities": [{"name": "...", "subject": "...", "expires": "...", "signed": 1}]}`. |
+| `GET /api/authorities`    | The CAs: `{"authorities": [{"id": "...", "name": "...", "subject": "...", "expires": "...", "signed": 1}]}`. |
 | `POST /api/authorities`   | Upload a CA: `{"name": "...", "cert": "PEM", "key": "PEM"}`; without `name`, it is named after its common name. `POST /api/authorities/preview` previews it. |
+| `GET /api/authorities/{name}` | One CA in full, with `serial`, `sha256`, `chain` and the names of the `certificates` it signed. |
+| `PATCH /api/authorities/{name}` | Rename a CA: `{"name": "..."}`. The certificates it signed follow. |
 | `DELETE /api/authorities/{name}` | Delete a CA; the certificates it signed stay. |
 | `GET /api/authorities/{name}/cert.pem` | The CA's certificate, to install on clients. |
 | `POST /api/generate`      | The configuration generated from a YAML or JSON configuration, without storing anything. |

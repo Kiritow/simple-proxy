@@ -12,6 +12,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -321,6 +322,9 @@ type Info struct {
 	NotBefore  time.Time
 	NotAfter   time.Time
 	SelfSigned bool // a root, which clients must trust already
+	// Serial is the serial number, and SHA256 the SHA-256 fingerprint of the
+	// certificate, as colon-separated hex bytes like browsers show them.
+	Serial, SHA256 string
 }
 
 // Describe describes the first certificate of p.
@@ -328,6 +332,7 @@ func Describe(p *Pair) Info { return DescribeCert(p.Leaf()) }
 
 // DescribeCert describes c.
 func DescribeCert(c *x509.Certificate) Info {
+	sum := sha256.Sum256(c.Raw)
 	info := Info{
 		Subject:    nameOf(c.Subject),
 		Issuer:     nameOf(c.Issuer),
@@ -335,6 +340,8 @@ func DescribeCert(c *x509.Certificate) Info {
 		NotBefore:  c.NotBefore,
 		NotAfter:   c.NotAfter,
 		SelfSigned: selfSigned(c),
+		Serial:     hexBytes(c.SerialNumber.Bytes()),
+		SHA256:     hexBytes(sum[:]),
 	}
 	info.Domains = slices.Clone(c.DNSNames)
 	for _, ip := range c.IPAddresses {
@@ -344,6 +351,18 @@ func DescribeCert(c *x509.Certificate) Info {
 		info.Domains = []string{c.Subject.CommonName}
 	}
 	return info
+}
+
+// hexBytes formats b like "04:A1:FF".
+func hexBytes(b []byte) string {
+	if len(b) == 0 {
+		return "00"
+	}
+	parts := make([]string, len(b))
+	for i, x := range b {
+		parts[i] = fmt.Sprintf("%02X", x)
+	}
+	return strings.Join(parts, ":")
 }
 
 func nameOf(n pkix.Name) string {

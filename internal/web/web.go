@@ -131,9 +131,13 @@ func NewHandler(opts Options) http.Handler {
 	mux.HandleFunc("POST /api/certificates/upload/preview", h.previewUpload(false))
 	mux.HandleFunc("POST /api/certificates/sign/preview", h.previewSign)
 	mux.HandleFunc("POST /api/authorities/preview", h.previewUpload(true))
+	mux.HandleFunc("GET /api/certificates/{name}", h.certificate)
+	mux.HandleFunc("PATCH /api/certificates/{name}", h.renameCertificate)
 	mux.HandleFunc("DELETE /api/certificates/{name}", h.deleteCertificate)
 	mux.HandleFunc("GET /api/authorities", h.authorities)
 	mux.HandleFunc("POST /api/authorities", h.addAuthority)
+	mux.HandleFunc("GET /api/authorities/{name}", h.authority)
+	mux.HandleFunc("PATCH /api/authorities/{name}", h.renameAuthority)
 	mux.HandleFunc("DELETE /api/authorities/{name}", h.deleteAuthority)
 	mux.HandleFunc("GET /api/authorities/{name}/cert.pem", h.authorityCert)
 	mux.HandleFunc("POST /api/validate", h.validate)
@@ -360,6 +364,33 @@ func (h *handler) writePreview(w http.ResponseWriter, r *http.Request, p manager
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (h *handler) certificate(w http.ResponseWriter, r *http.Request) {
+	d, err := h.m.CertificateDetails(r.Context(), r.PathValue("name"))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+// renameRequest renames a certificate or a CA.
+type renameRequest struct {
+	Name string `json:"name"`
+}
+
+func (h *handler) renameCertificate(w http.ResponseWriter, r *http.Request) {
+	var req renameRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	cert, err := h.m.RenameCertificate(r.Context(), r.PathValue("name"), req.Name)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cert)
+}
+
 func (h *handler) deleteCertificate(w http.ResponseWriter, r *http.Request) {
 	if err := h.m.DeleteCertificate(r.Context(), r.PathValue("name")); err != nil {
 		h.fail(w, r, err)
@@ -392,6 +423,28 @@ func (h *handler) addAuthority(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, ca)
+}
+
+func (h *handler) authority(w http.ResponseWriter, r *http.Request) {
+	d, err := h.m.AuthorityDetails(r.Context(), r.PathValue("name"))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (h *handler) renameAuthority(w http.ResponseWriter, r *http.Request) {
+	var req renameRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	ca, err := h.m.RenameAuthority(r.Context(), r.PathValue("name"), req.Name)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ca)
 }
 
 func (h *handler) deleteAuthority(w http.ResponseWriter, r *http.Request) {

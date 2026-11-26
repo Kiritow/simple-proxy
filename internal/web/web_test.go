@@ -204,6 +204,15 @@ func TestLocalCertificates(t *testing.T) {
 		{"site", "POST", "/api/sites", `{"config": {"server_name": "app.example.com", "https": true, "default": {"port": 1}}}`, false, 201, ""},
 		{"in use", "DELETE", "/api/certificates/app.example.com", "", false, 400, `"code":"cert_in_use","value":"app.example.com"`},
 		{"missing", "DELETE", "/api/certificates/nope", "", false, 404, "certificate not found"},
+		{"details", "GET", "/api/certificates/app.example.com", "", false, 200, `"subject":"app.example.com"`},
+		{"details of sites", "GET", "/api/certificates/app.example.com", "", false, 200, `"name":"app.example.com","enabled":true}]`},
+		{"missing details", "GET", "/api/certificates/nope", "", false, 404, "certificate not found"},
+		{"rename", "PATCH", "/api/certificates/app.example.com", `{"name": "App / 2026"}`, false, 200, `"name":"App / 2026","source":"uploaded"`},
+		{"renamed", "GET", "/api/certificates/App%20%2F%202026", "", false, 200, `"name":"App / 2026"`},
+		{"site follows", "GET", "/api/sites", "", false, 200, `"cert_name":"App / 2026"`},
+		{"rename problems", "PATCH", "/api/certificates/App%20%2F%202026", `{"name": ""}`, false, 400, `"field":"name","message":"is required","code":"required"`},
+		{"rename missing", "PATCH", "/api/certificates/nope", `{"name": "x"}`, false, 404, "certificate not found"},
+		{"rename unknown field", "PATCH", "/api/certificates/App%20%2F%202026", `{"title": "x"}`, false, 400, "unknown field"},
 		{"CA preview", "POST", "/api/authorities/preview", body(map[string]string{"cert": caCert, "key": caKey}), false, 200, `"name":"Home CA","subject":"Home CA","issuer":"Home CA"`},
 		{"add CA", "POST", "/api/authorities", body(map[string]string{"cert": caCert, "key": caKey}), false, 201, `"name":"Home CA","subject":"Home CA","issuer":"Home CA","key":"EC P-256"`},
 		{"sign preview", "POST", "/api/certificates/sign/preview", `{"authority": "Home CA", "domains": ["nas.lan"], "days": 30, "key_type": "rsa"}`, false, 200,
@@ -214,7 +223,12 @@ func TestLocalCertificates(t *testing.T) {
 		{"CAs", "GET", "/api/authorities", "", false, 200, `"signed":1`},
 		{"CA certificate", "GET", "/api/authorities/Home%20CA/cert.pem", "", false, 200, "-----BEGIN CERTIFICATE-----"},
 		{"missing CA certificate", "GET", "/api/authorities/nope/cert.pem", "", false, 404, "CA not found"},
-		{"delete CA", "DELETE", "/api/authorities/Home%20CA", "", false, 204, ""},
+		{"CA details", "GET", "/api/authorities/Home%20CA", "", false, 200, `"certificates":["nas.lan"]`},
+		{"missing CA details", "GET", "/api/authorities/nope", "", false, 404, "CA not found"},
+		{"rename CA", "PATCH", "/api/authorities/Home%20CA", `{"name": "Home CA 2026"}`, false, 200, `"name":"Home CA 2026","subject":"Home CA"`},
+		{"signed follows", "GET", "/api/certificates", "", false, 200, `"ca":"Home CA 2026"`},
+		{"rename missing CA", "PATCH", "/api/authorities/Home%20CA", `{"name": "x"}`, false, 404, "CA not found"},
+		{"delete CA", "DELETE", "/api/authorities/Home%20CA%202026", "", false, 204, ""},
 		{"delete signed", "DELETE", "/api/certificates/nas.lan", "", false, 204, ""},
 	})
 	// No response contains a private key.
@@ -224,6 +238,14 @@ func TestLocalCertificates(t *testing.T) {
 		h.ServeHTTP(r, httptest.NewRequest("POST", path, strings.NewReader(body(map[string]string{"cert": caCert, "key": caKey}))))
 		if strings.Contains(r.Body.String(), "PRIVATE") {
 			t.Errorf("%s answered with a private key: %s", path, r.Body)
+		}
+	}
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/api/certificates/upload", strings.NewReader(body(map[string]string{"cert": leafCert, "key": leafKey}))))
+	for _, path := range []string{"/api/certificates/app.example.com", "/api/authorities/Home%20CA"} {
+		r := httptest.NewRecorder()
+		h.ServeHTTP(r, httptest.NewRequest("GET", path, nil))
+		if r.Code != 200 || strings.Contains(r.Body.String(), "PRIVATE") {
+			t.Errorf("GET %s = %d %s, want details without a private key", path, r.Code, r.Body)
 		}
 	}
 	r := httptest.NewRecorder()

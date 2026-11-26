@@ -5,6 +5,8 @@ import {
   errorOf,
   type ApiError,
   type Authority,
+  type AuthorityDetails,
+  type CertificateDetails,
   type CertificateList,
   type CertificatePreview,
   type FieldProblem,
@@ -64,6 +66,16 @@ export const useCertificates = (): Resource<CertificateList> =>
 
 export const useAuthorities = (): Resource<Authority[]> =>
   useResource(api.authorities)
+
+// useCertificateDetails loads the details of the certificate of the given
+// name, again when the name changes.
+export const useCertificateDetails = (
+  name: string
+): Resource<CertificateDetails> =>
+  useResource(useCallback(() => api.certificate(name), [name]))
+
+export const useAuthorityDetails = (name: string): Resource<AuthorityDetails> =>
+  useResource(useCallback(() => api.authority(name), [name]))
 
 // Problems are problems the server found with a site being edited, by the
 // key of the input to fix.
