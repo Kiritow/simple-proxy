@@ -68,6 +68,26 @@ export function newSite(): Site {
   }
 }
 
+// rawTemplate is where raw configurations written from scratch start.
+export const rawTemplate = `server {
+  listen 80;
+  server_name example.com;
+
+  location / {
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_pass http://127.0.0.1:3000;
+  }
+}
+`
+
+// newRawSite returns a new site with a raw configuration, from rawTemplate.
+export function newRawSite(): Site {
+  return { ...newSite(), raw: rawTemplate }
+}
+
 export const domainsOf = (s: Site) =>
   s.raw !== null
     ? rawServerNames(s.raw)

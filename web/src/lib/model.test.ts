@@ -8,10 +8,12 @@ import {
   domainsOf,
   fromStored,
   matchesSearch,
+  newRawSite,
   newRoute,
   newSite,
   parseYaml,
   rawCertificates,
+  rawTemplate,
   rawServerNames,
   resolveField,
   sameConfig,
@@ -285,6 +287,15 @@ test("raw sites serialize to their raw configuration only", () => {
     parseYaml("servers:\n- server_name: c.example.com\n")[0].raw,
     null
   )
+})
+
+test("new raw sites start from the template", () => {
+  const site = newRawSite()
+  assert.equal(site.raw, rawTemplate)
+  assert.deepEqual(domainsOf(site), ["example.com"])
+  assert.deepEqual(toServer(site), { raw: rawTemplate })
+  assert.ok(sameConfig(site, newRawSite()), "the same, with other IDs")
+  assert.ok(!sameConfig(site, newSite()), "not a blank builder site")
 })
 
 test("rawServerNames skips comments and catch-alls", () => {

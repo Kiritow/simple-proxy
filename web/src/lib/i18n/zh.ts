@@ -197,7 +197,12 @@ export const zh: Messages = {
     toBuilderText:
       "原始配置中的所有内容（包括你的编辑）都会丢失。构建器会恢复到切换之前的设置。",
     toBuilderTextBlank:
-      "原始配置中的所有内容（包括你的编辑）都会丢失。这个站点是手写的配置，构建器将从空白开始。",
+      "原始配置中的所有内容（包括你的编辑）都会丢失。构建器中还没有这个站点的设置，将从空白开始。",
+    chooseText: "选择这个站点的配置方式。",
+    chooseBuilderText:
+      "填写域名、上游和路由，自动生成 nginx 配置。之后也可以转换为原始 nginx 配置。",
+    chooseRawText:
+      "自己编写 server 块，适合构建器无法表达的配置。从一个模板开始。",
     toBuilderAction: "丢弃并切换",
     discardTitle: "放弃修改？",
     discardText: "这个站点有尚未保存的修改，关闭编辑器后将会丢失。",

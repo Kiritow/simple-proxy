@@ -206,7 +206,12 @@ export const en = {
     toBuilderText:
       "Everything in the raw configuration will be lost, your edits included. The builder returns to its settings from before you switched.",
     toBuilderTextBlank:
-      "Everything in the raw configuration will be lost, your edits included. The site was written by hand, so the builder starts empty.",
+      "Everything in the raw configuration will be lost, your edits included. The builder has no settings for this site yet, so it starts empty.",
+    chooseText: "How do you want to configure this site?",
+    chooseBuilderText:
+      "Fill in domains, upstreams and routes, and the nginx configuration is generated. You can turn it into raw nginx config later.",
+    chooseRawText:
+      "Write the server blocks yourself, for what the builder cannot express. Starts from a template.",
     toBuilderAction: "Discard and switch",
     discardTitle: "Discard your changes?",
     discardText:
