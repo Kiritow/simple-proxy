@@ -12,6 +12,8 @@ export const zh: Messages = {
     language: "语言",
     followBrowser: "跟随浏览器",
     toggleTheme: "切换深色模式",
+    builtFrom: (commit) => `构建自提交 ${commit}`,
+    modified: "（含未提交的修改）",
     tryAgain: "重试",
     cancel: "取消",
     close: "关闭",

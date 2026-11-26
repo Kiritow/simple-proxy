@@ -134,7 +134,7 @@ together, with acme.sh: nginx serves ports 80 and 443, and the console port
 certificates are kept in the volume `/data`.
 
 ```bash
-docker build -t simple-proxy .
+docker build --build-arg COMMIT=$(git rev-parse HEAD) -t simple-proxy .
 docker run -d --name simple-proxy --restart unless-stopped \
   -p 80:80 -p 443:443 -p 127.0.0.1:81:81 \
   -v simple-proxy:/data \
@@ -164,8 +164,11 @@ reach it through an SSH tunnel or a VPN.
   policy to start it again. nginx starts without the sites, which
   simple-proxy applies right after, so that sites nginx rejects cannot keep
   the container from starting.
-- Build arguments: `NGINX_IMAGE` (default `nginx:stable`) and
-  `ACME_SH_VERSION`.
+- Build arguments: `NGINX_IMAGE` (default `nginx:stable`),
+  `ACME_SH_VERSION`, and `COMMIT`, the commit the console's footer shows,
+  since the build context has no `.git`; without it, the footer shows none.
+  Binaries built with `go build` or `build.sh` in a git checkout know their
+  commit by themselves.
 
 ### nginx in a container
 

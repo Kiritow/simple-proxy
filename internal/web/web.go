@@ -24,6 +24,7 @@ import (
 
 	"github.com/kiritow/simple-proxy/internal/acme"
 	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/buildinfo"
 	"github.com/kiritow/simple-proxy/internal/certs"
 	"github.com/kiritow/simple-proxy/internal/config"
 	"github.com/kiritow/simple-proxy/internal/manager"
@@ -50,6 +51,7 @@ type Options struct {
 	Manager *manager.Manager
 	Example []byte // the example configuration
 	Logger  *slog.Logger
+	Build   buildinfo.Info // what the server was built from
 }
 
 // NewHandler returns a handler serving the browser UI at / and this API:
@@ -61,7 +63,7 @@ type Options struct {
 //	DELETE /api/sites/{id}     remove a site; ?generation=1
 //	POST   /api/sites/preview  what saving a site would change: {"id": "...", "config": {...}}
 //	POST   /api/sites/raw      the site as a raw configuration: {"config": {...}} gives {"raw": "..."}
-//	GET    /api/status        how configuration is applied to nginx
+//	GET    /api/status        how configuration is applied to nginx, and the commit the server was built from
 //	POST   /api/apply         apply the stored sites again
 //	GET    /api/nginx.conf    the configuration generated from the sites
 //	GET    /api/certificates  the certificates: {"certificates": [...], "acme_error": "..."}
@@ -117,7 +119,7 @@ func NewHandler(opts Options) http.Handler {
 		panic(err) // dist is embedded, so this cannot happen
 	}
 	files := http.FileServerFS(ui)
-	h := &handler{m: opts.Manager, log: opts.Logger}
+	h := &handler{m: opts.Manager, log: opts.Logger, build: opts.Build}
 
 	mux := http.NewServeMux()
 	// Only the index page and the build output are routed to the file server,
@@ -169,8 +171,9 @@ func immutable(next http.Handler) http.Handler {
 }
 
 type handler struct {
-	m   *manager.Manager
-	log *slog.Logger
+	m     *manager.Manager
+	log   *slog.Logger
+	build buildinfo.Info
 }
 
 type siteResponse struct {
@@ -298,8 +301,14 @@ func (h *handler) replaceSites(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string][]store.Site{"sites": sites})
 }
 
+// statusResponse is the status of the manager, with the build of the server.
+type statusResponse struct {
+	manager.Status
+	buildinfo.Info
+}
+
 func (h *handler) status(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, h.m.Status())
+	writeJSON(w, http.StatusOK, statusResponse{h.m.Status(), h.build})
 }
 
 func (h *handler) apply(w http.ResponseWriter, r *http.Request) {
@@ -307,7 +316,7 @@ func (h *handler) apply(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, h.m.Status())
+	writeJSON(w, http.StatusOK, statusResponse{h.m.Status(), h.build})
 }
 
 func (h *handler) nginxConf(w http.ResponseWriter, r *http.Request) {

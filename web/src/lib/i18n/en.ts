@@ -10,6 +10,8 @@ export const en = {
     language: "Language",
     followBrowser: "Browser language",
     toggleTheme: "Toggle dark mode",
+    builtFrom: (commit: string) => `Built from commit ${commit}`,
+    modified: "(modified)",
     tryAgain: "Try again",
     cancel: "Cancel",
     close: "Close",

@@ -61,6 +61,8 @@ export type Status = {
   acme: boolean // acme.sh can list and issue certificates
   acme_webroot?: string
   cert_dir: string // where uploaded and signed certificates are written
+  commit?: string // the full hash of the commit the server was built from
+  modified?: boolean // built with uncommitted changes
 }
 
 // NginxInfo describes nginx, as nginx -V does.

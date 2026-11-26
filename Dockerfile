@@ -5,7 +5,7 @@
 # certificates and CAs are kept in the volume /data. See "Docker" in
 # README.md.
 #
-#   docker build -t simple-proxy .
+#   docker build --build-arg COMMIT=$(git rev-parse HEAD) -t simple-proxy .
 
 ARG NGINX_IMAGE=docker.io/library/nginx:stable
 
@@ -26,10 +26,15 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 COPY --from=ui /src/internal/web/dist internal/web/dist
+# The commit built, which the console shows: the build context has no .git
+# for go build to find it in.
+ARG COMMIT=""
 # The same flags as build.sh: a static, stripped binary.
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags='-s -w' -o /out/simple-proxy .
+    go build -trimpath \
+        -ldflags="-s -w -X github.com/kiritow/simple-proxy/internal/buildinfo.Commit=${COMMIT}" \
+        -o /out/simple-proxy .
 
 FROM ${NGINX_IMAGE}
 ARG ACME_SH_VERSION=3.1.7

@@ -21,6 +21,7 @@ import (
 
 	"github.com/kiritow/simple-proxy/internal/acme"
 	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/buildinfo"
 	"github.com/kiritow/simple-proxy/internal/certs"
 	"github.com/kiritow/simple-proxy/internal/manager"
 	"github.com/kiritow/simple-proxy/internal/nginx"
@@ -58,6 +59,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	_ = flags.Parse(args) // ExitOnError: Parse exits instead of returning errors
 
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
+	build := buildinfo.Read()
+	logger.Info("starting simple-proxy", "commit", build.Commit, "modified", build.Modified)
 	if *certDir == "" {
 		*certDir = filepath.Join(filepath.Dir(*dbPath), "certs")
 	}
@@ -120,6 +123,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 			Manager: m,
 			Example: exampleConfig,
 			Logger:  logger,
+			Build:   build,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),

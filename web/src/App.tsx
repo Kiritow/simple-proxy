@@ -15,6 +15,7 @@ import {
   useSites,
   useStatus,
 } from "@/lib/hooks"
+import type { Status } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 
 type Page = "sites" | "certificates"
@@ -114,6 +115,8 @@ export function App() {
         )}
       </main>
 
+      <Footer status={status.data} />
+
       <StatusDialog
         open={statusOpen}
         onOpenChange={setStatusOpen}
@@ -121,6 +124,45 @@ export function App() {
       />
       <Toaster position="bottom-right" />
     </div>
+  )
+}
+
+const repository = "https://github.com/Kiritow/simple-proxy"
+
+// Footer links to the repository, and to the commit the server was built
+// from, once the status tells it.
+function Footer({ status }: { status: Status | null }) {
+  const { t } = useI18n()
+  const commit = status?.commit
+  const link = "underline-offset-4 hover:text-foreground hover:underline"
+  return (
+    <footer className="border-t">
+      <div className="mx-auto flex h-12 max-w-6xl items-center gap-2 px-4 text-xs text-muted-foreground sm:px-6">
+        <a
+          href={repository}
+          target="_blank"
+          rel="noreferrer"
+          className={cn("font-medium", link)}
+        >
+          {t.app.name}
+        </a>
+        {commit && (
+          <>
+            <span aria-hidden>·</span>
+            <a
+              href={`${repository}/commit/${commit}`}
+              target="_blank"
+              rel="noreferrer"
+              title={t.app.builtFrom(commit)}
+              className={cn("font-mono", link)}
+            >
+              {commit.slice(0, 7)}
+            </a>
+            {status?.modified && <span>{t.app.modified}</span>}
+          </>
+        )}
+      </div>
+    </footer>
   )
 }
 

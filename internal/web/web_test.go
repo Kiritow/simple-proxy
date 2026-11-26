@@ -16,6 +16,7 @@ import (
 
 	"github.com/kiritow/simple-proxy/internal/acme"
 	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/buildinfo"
 	"github.com/kiritow/simple-proxy/internal/certs"
 	"github.com/kiritow/simple-proxy/internal/certs/certstest"
 	"github.com/kiritow/simple-proxy/internal/manager"
@@ -85,6 +86,7 @@ func newHandler(t *testing.T, o options) http.Handler {
 		Manager: manager.New(opts),
 		Example: []byte(example),
 		Logger:  slog.New(slog.DiscardHandler),
+		Build:   buildinfo.Info{Commit: "0123abcd", Modified: true},
 	})
 }
 
@@ -131,7 +133,9 @@ func TestSites(t *testing.T) {
 		{"replace all", "PUT", "/api/sites", `{"configs": [{"server_name": "x.example.com", "default": {"port": 1}}]}`, false, 200, `"server_name":"x.example.com"`},
 		{"replaced", "GET", "/api/nginx.conf", "", false, 200, "server_name x.example.com;"},
 		{"status", "GET", "/api/status", "", false, 200, `"applies":true`},
+		{"status has the build", "GET", "/api/status", "", false, 200, `"commit":"0123abcd","modified":true}`},
 		{"apply", "POST", "/api/apply", "", false, 200, `"applied_at":`},
+		{"apply has the build", "POST", "/api/apply", "", false, 200, `"commit":"0123abcd"`},
 	})
 }
 
