@@ -5,6 +5,7 @@
 /web/node_modules/
 
 # Local configuration and output
+/localdata/
 /config.yaml
 /config.yml
 /proxy.conf
