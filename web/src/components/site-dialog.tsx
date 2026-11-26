@@ -77,6 +77,7 @@ import {
   newRoute,
   newSite,
   routeKey,
+  sameConfig,
   serialize,
   siteKey,
   toServer,
@@ -138,6 +139,20 @@ export function SiteDialog({
   // The generation of the stored site that the edits are based on. Saving
   // fails if the site has changed since, i.e. in another window.
   const [base, setBase] = useState(stored?.generation ?? 0)
+  // The site as stored, or a blank one for a new site. The site has changes
+  // if saving it would change something, which closing the dialog loses.
+  const [saved, setSaved] = useState<Site>(() =>
+    stored ? fromStored(stored) : newSite()
+  )
+  const dirty = useMemo(() => !sameConfig(site, saved), [site, saved])
+  const [confirmingClose, setConfirmingClose] = useState(false)
+  // close closes the dialog, as asked by its Cancel or close button, the
+  // Escape key or a click outside it, once changes are confirmed lost.
+  const close = () => {
+    if (saving) return
+    if (dirty) setConfirmingClose(true)
+    else onOpenChange(false)
+  }
 
   const preview = usePreview(site, stored?.id ?? null)
   const problems = useMemo<Problems>(() => {
@@ -174,6 +189,7 @@ export function SiteDialog({
       setSite(fromStored(current))
       setTouched(false)
     }
+    setSaved(fromStored(current))
     setBase(current.generation)
     setFailure(null)
   }
@@ -278,7 +294,7 @@ export function SiteDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !saving && onOpenChange(o)}>
+    <Dialog open={open} onOpenChange={(o) => !o && close()}>
       <DialogContent className="flex h-[92svh] flex-col sm:max-w-6xl lg:h-[86svh]">
         <DialogHeader>
           <DialogTitle>
@@ -539,12 +555,35 @@ export function SiteDialog({
               {t.app.cancel}
             </Button>
           </DialogClose>
-          <Button onClick={save} disabled={saving || deletedElsewhere}>
+          <Button
+            onClick={save}
+            disabled={saving || deletedElsewhere || !dirty}
+          >
             {saving && <Spinner />}
             {saving ? t.site.saving : t.site.save}
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <AlertDialog open={confirmingClose} onOpenChange={setConfirmingClose}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t.site.discardTitle}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {stored ? t.site.discardText : t.site.discardTextNew}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t.site.keepEditing}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => onOpenChange(false)}
+            >
+              {t.site.discardAction}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={confirmingBuilder} onOpenChange={setConfirmingBuilder}>
         <AlertDialogContent>

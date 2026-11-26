@@ -208,6 +208,13 @@ export const en = {
     toBuilderTextBlank:
       "Everything in the raw configuration will be lost, your edits included. The site was written by hand, so the builder starts empty.",
     toBuilderAction: "Discard and switch",
+    discardTitle: "Discard your changes?",
+    discardText:
+      "This site has changes that are not saved. Closing the editor loses them.",
+    discardTextNew:
+      "This new site is not saved. Closing the editor loses what you entered.",
+    keepEditing: "Keep editing",
+    discardAction: "Discard",
   },
   certs: {
     title: "Certificates",

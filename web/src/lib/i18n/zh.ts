@@ -199,6 +199,11 @@ export const zh: Messages = {
     toBuilderTextBlank:
       "原始配置中的所有内容（包括你的编辑）都会丢失。这个站点是手写的配置，构建器将从空白开始。",
     toBuilderAction: "丢弃并切换",
+    discardTitle: "放弃修改？",
+    discardText: "这个站点有尚未保存的修改，关闭编辑器后将会丢失。",
+    discardTextNew: "这个新站点还没有保存，关闭编辑器后填写的内容将会丢失。",
+    keepEditing: "继续编辑",
+    discardAction: "放弃修改",
   },
   certs: {
     title: "证书",

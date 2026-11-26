@@ -305,6 +305,13 @@ export function toServer(site: Site): ServerJSON {
   return serialize([site]).config.servers[0]
 }
 
+// sameConfig tells whether two sites have the same configuration, i.e.
+// saving one in place of the other would change nothing. What the server
+// ignores does not count: IDs, blank directives, surrounding spaces.
+export function sameConfig(a: Site, b: Site): boolean {
+  return JSON.stringify(toServer(a)) === JSON.stringify(toServer(b))
+}
+
 export function fromStored(stored: Stored): Site {
   const [site] = sitesFromConfig({ servers: [stored.config] })
   return { ...site, id: stored.id }

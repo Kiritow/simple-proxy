@@ -13,6 +13,7 @@ import {
   rawCertificates,
   rawServerNames,
   resolveField,
+  sameConfig,
   routeKey,
   serialize,
   siteKey,
@@ -186,6 +187,26 @@ test("stored sites keep their IDs and content", () => {
   const loaded = fromStored(JSON.parse(JSON.stringify(stored)))
   assert.equal(loaded.id, "abc")
   assert.deepEqual(toServer(loaded), stored.config)
+})
+
+test("sameConfig compares what saving would store", () => {
+  const [site] = parseYaml(example)
+  const loaded = fromStored({ id: "abc", config: toServer(site) })
+  assert.ok(sameConfig(site, loaded), "a stored site, loaded again")
+  assert.ok(sameConfig(newSite(), newSite()), "blank sites, with other IDs")
+
+  // Blank directives and spaces are not stored.
+  const padded = {
+    ...loaded,
+    serverName: ` ${loaded.serverName} `,
+    options: [...loaded.options, { id: "new", text: "  " }],
+  }
+  assert.ok(sameConfig(site, padded), "blank directive and spaces")
+
+  const changed = { ...loaded, root: { ...loaded.root, port: "4000" } }
+  assert.ok(!sameConfig(site, changed), "another port")
+  assert.ok(!sameConfig(site, { ...loaded, enabled: false }), "disabled")
+  assert.ok(!sameConfig(newSite(), site), "a new site with content")
 })
 
 test("an incomplete site survives the round trip", () => {
