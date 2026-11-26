@@ -27,6 +27,10 @@ type Site struct {
 	// changes based on an outdated version of the site can be detected. It
 	// is maintained by the Store, and ignored by ReplaceSites.
 	Generation int64 `json:"generation"`
+	// CreatedAt is when the site was added, and UpdatedAt when its Config
+	// last changed. Like Generation, they are maintained by the Store.
+	CreatedAt time.Time `json:"created_at,omitzero"`
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
 }
 
 // Cert is a certificate kept by simple-proxy, as opposed to acme.sh.
@@ -218,7 +222,8 @@ func (s *Store) migrate(ctx context.Context) error {
 
 // Sites returns the stored sites in order.
 func (s *Store) Sites(ctx context.Context) ([]Site, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, config, generation FROM sites ORDER BY position")
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT id, config, generation, created_at, updated_at FROM sites ORDER BY position")
 	if err != nil {
 		return nil, err
 	}
@@ -227,11 +232,13 @@ func (s *Store) Sites(ctx context.Context) ([]Site, error) {
 	sites := []Site{}
 	for rows.Next() {
 		var site Site
-		var config string
-		if err := rows.Scan(&site.ID, &config, &site.Generation); err != nil {
+		var config, created, updated string
+		if err := rows.Scan(&site.ID, &config, &site.Generation, &created, &updated); err != nil {
 			return nil, err
 		}
 		site.Config = json.RawMessage(config)
+		site.CreatedAt, _ = time.Parse(time.RFC3339, created)
+		site.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
 		sites = append(sites, site)
 	}
 	return sites, rows.Err()

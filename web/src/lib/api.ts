@@ -31,6 +31,8 @@ export type StoredSite = {
   id: string
   config: ServerJSON
   generation: number // counts the changes of config
+  created_at?: string // when the site was added
+  updated_at?: string // when config last changed
   problems?: FieldProblem[]
 }
 

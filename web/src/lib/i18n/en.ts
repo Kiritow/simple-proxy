@@ -91,6 +91,21 @@ export const en = {
     conflict:
       "The site was changed in another window. The list has been refreshed.",
     imported: (n: number) => `Imported ${n} ${n === 1 ? "site" : "sites"}`,
+    sort: "Sort",
+    sorts: {
+      "created-asc": "Date added (oldest first)",
+      "created-desc": "Date added (newest first)",
+      "updated-desc": "Last modified (newest first)",
+      "updated-asc": "Last modified (oldest first)",
+      "name-asc": "Name (A–Z)",
+      "name-desc": "Name (Z–A)",
+    },
+    view: "View",
+    viewList: "List",
+    viewCards: "Cards",
+    modified: "Modified",
+    modifiedAt: (when: string) => `Modified ${when}`,
+    addedAt: (when: string) => `Added ${when}`,
   },
   site: {
     newTitle: "New site",

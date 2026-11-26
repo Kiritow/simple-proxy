@@ -77,6 +77,38 @@ export const useCertificateDetails = (
 export const useAuthorityDetails = (name: string): Resource<AuthorityDetails> =>
   useResource(useCallback(() => api.authority(name), [name]))
 
+// useNow returns the current time, updated every interval milliseconds,
+// e.g. to keep "3 minutes ago" up to date.
+export function useNow(interval: number): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), interval)
+    return () => clearInterval(timer)
+  }, [interval])
+  return now
+}
+
+// useStoredState is like useState for a preference, which is kept in the
+// browser under key. Values other than choices are taken for initial.
+export function useStoredState<T extends string>(
+  key: string,
+  initial: T,
+  choices: readonly T[]
+): [T, (value: T) => void] {
+  const [value, setValue] = useState<T>(() => {
+    const stored = localStorage.getItem(key)
+    return choices.find((c) => c === stored) ?? initial
+  })
+  const set = useCallback(
+    (next: T) => {
+      setValue(next)
+      localStorage.setItem(key, next)
+    },
+    [key]
+  )
+  return [value, set]
+}
+
 // Problems are problems the server found with a site being edited, by the
 // key of the input to fix.
 export type Problems = { byKey: Map<string, FieldProblem> }

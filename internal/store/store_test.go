@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -11,6 +10,7 @@ import (
 	"regexp"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/kiritow/simple-proxy/internal/store"
 )
@@ -34,11 +34,19 @@ func stored(id, config string, generation int64) store.Site {
 	return store.Site{ID: id, Config: json.RawMessage(config), Generation: generation}
 }
 
+// sites returns the stored sites without their times, which it checks are
+// set.
 func sites(t *testing.T, s *store.Store) []store.Site {
 	t.Helper()
 	got, err := s.Sites(t.Context())
 	if err != nil {
 		t.Fatal(err)
+	}
+	for i, site := range got {
+		if site.CreatedAt.IsZero() || site.UpdatedAt.IsZero() {
+			t.Errorf("site %q has no times: %+v", site.ID, site)
+		}
+		got[i].CreatedAt, got[i].UpdatedAt = time.Time{}, time.Time{}
 	}
 	return got
 }
@@ -111,8 +119,18 @@ func TestUpdatedAtChangesOnlyWithConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sites.db")
 	s := open(t, path)
 	ctx := t.Context()
+	before := time.Now().Truncate(time.Second)
 	if err := s.ReplaceSites(ctx, []store.Site{site("a", `{}`), site("b", `{}`)}); err != nil {
 		t.Fatal(err)
+	}
+	got, err := s.Sites(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, site := range got {
+		if site.CreatedAt.Before(before) || !site.UpdatedAt.Equal(site.CreatedAt) {
+			t.Errorf("new site %q: created %v, updated %v; want both since %v", site.ID, site.CreatedAt, site.UpdatedAt, before)
+		}
 	}
 
 	db, err := sql.Open("sqlite", path)
@@ -121,27 +139,23 @@ func TestUpdatedAtChangesOnlyWithConfig(t *testing.T) {
 	}
 	defer db.Close()
 	// Backdate both sites, then change only b.
-	if _, err := db.ExecContext(ctx, "UPDATE sites SET updated_at = 'then'"); err != nil {
+	then := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	if _, err := db.ExecContext(ctx, "UPDATE sites SET created_at = ?1, updated_at = ?1", then.Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ReplaceSites(ctx, []store.Site{site("a", `{ }`), site("b", `{"gzip": true}`)}); err != nil {
 		t.Fatal(err)
 	}
-	updated := map[string]string{}
-	rows, err := db.QueryContext(context.Background(), "SELECT id, updated_at FROM sites")
-	if err != nil {
+	if got, err = s.Sites(ctx); err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, at string
-		if err := rows.Scan(&id, &at); err != nil {
-			t.Fatal(err)
+	for _, site := range got {
+		if !site.CreatedAt.Equal(then) {
+			t.Errorf("site %q: created %v, want %v kept", site.ID, site.CreatedAt, then)
 		}
-		updated[id] = at
 	}
-	if updated["a"] != "then" || updated["b"] == "then" {
-		t.Errorf("updated_at = %v, want a unchanged and b updated", updated)
+	if a, b := got[0], got[1]; !a.UpdatedAt.Equal(then) || b.UpdatedAt.Before(before) {
+		t.Errorf("updated a at %v, b at %v; want a unchanged and b updated", a.UpdatedAt, b.UpdatedAt)
 	}
 }
 

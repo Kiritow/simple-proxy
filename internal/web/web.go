@@ -54,7 +54,7 @@ type Options struct {
 
 // NewHandler returns a handler serving the browser UI at / and this API:
 //
-//	GET    /api/sites          the sites: {"sites": [{"id": "...", "config": {...}, "generation": 1}]}
+//	GET    /api/sites          the sites: {"sites": [{"id": "...", "config": {...}, "generation": 1, "created_at": "...", "updated_at": "..."}]}
 //	POST   /api/sites          add a site: {"config": {...}}
 //	PUT    /api/sites          replace all sites: {"configs": [{...}]}
 //	PUT    /api/sites/{id}     change a site: {"config": {...}, "generation": 1}
