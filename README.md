@@ -99,6 +99,47 @@ unencrypted PKCS #1, PKCS #8 or SEC 1 keys, in the same text or separately.
 Signed certificates use a new ECDSA P-256 or RSA 2048 key, and the CA's
 chain without its root.
 
+### Docker image
+
+The [Dockerfile](Dockerfile) builds an image running simple-proxy and nginx
+together, with acme.sh: nginx serves ports 80 and 443, and the console port
+81. Sites, uploaded and signed certificates, CAs and acme.sh's account and
+certificates are kept in the volume `/data`.
+
+```bash
+docker build -t simple-proxy .
+docker run -d --name simple-proxy --restart unless-stopped \
+  -p 80:80 -p 443:443 -p 127.0.0.1:81:81 \
+  -v simple-proxy:/data \
+  simple-proxy
+```
+
+The console has no login: publish port 81 on 127.0.0.1 only, as above, and
+reach it through an SSH tunnel or a VPN.
+
+- **Upstreams** are reached from inside the container, where `127.0.0.1` is
+  the container itself. For services on the host, add
+  `--add-host host.docker.internal:host-gateway` and use that name as the
+  upstream host, or run with `--network host`. With host networking the
+  console listens on port 81 of every interface, so append
+  `-addr 127.0.0.1:81`.
+- **Flags** given after the image name are passed to simple-proxy and
+  override the image's defaults, e.g. `-addr`; any other command runs instead
+  of the services, e.g. `bash`.
+- **acme.sh** requests certificates from Let's Encrypt; set `ACME_SERVER`
+  to use another CA, such as `zerossl`. Pass the credentials of a DNS API as
+  environment variables, e.g. `-e CF_Token=...`; acme.sh keeps them in
+  `/data/acme.sh` once used. It checks for certificates to renew daily, and
+  reloads nginx after renewing one.
+- The certificate of the catch-all HTTPS server is generated in `/data` on
+  first start.
+- If nginx or simple-proxy exits, so does the container, for its restart
+  policy to start it again. nginx starts without the sites, which
+  simple-proxy applies right after, so that sites nginx rejects cannot keep
+  the container from starting.
+- Build arguments: `NGINX_IMAGE` (default `nginx:stable`) and
+  `ACME_SH_VERSION`.
+
 ### nginx in a container
 
 The configuration refers to certificates where acme.sh keeps them, to
@@ -221,6 +262,7 @@ internal/manager   site and certificate changes: check, apply, then store
 internal/web       HTTP API, embeds the UI from internal/web/dist
 web/               UI: React, Tailwind CSS and shadcn/ui
 web/src/lib/i18n/  the UI's messages in English (en.ts) and Chinese (zh.ts)
+Dockerfile         the image with nginx and acme.sh; docker/entrypoint.sh runs them
 ```
 
 The built UI in `internal/web/dist` is committed, so building the server only

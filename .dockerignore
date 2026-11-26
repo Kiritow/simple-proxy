@@ -1,0 +1,16 @@
+# The image builds the UI and the binary from the sources.
+.git
+.claude
+/web/node_modules
+/internal/web/dist
+/dist
+/bin
+/simple-proxy
+
+# Local data
+*.db
+*.db-journal
+/certs
+/config.yaml
+/config.yml
+/proxy.conf
