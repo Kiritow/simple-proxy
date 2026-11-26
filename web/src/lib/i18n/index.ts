@@ -2,7 +2,7 @@
 
 import { createContext, useContext } from "react"
 
-import type { FieldProblem } from "@/lib/api"
+import type { ApiError, FieldProblem } from "@/lib/api"
 import { en, type Messages } from "./en.ts"
 import { zh } from "./zh.ts"
 
@@ -33,6 +33,16 @@ export function describeProblem(t: Messages, p: FieldProblem): string {
   const describe =
     p.code && Object.hasOwn(t.problems, p.code) ? t.problems[p.code] : undefined
   return describe ? describe(p.value ?? "") : p.message
+}
+
+// describeError describes a failed request in t's language by its code, or
+// falls back to the server's own message for unknown codes.
+export function describeError(t: Messages, e: ApiError): string {
+  const text =
+    e.code && Object.hasOwn(t.auth.errors, e.code)
+      ? t.auth.errors[e.code]
+      : undefined
+  return text ?? e.message
 }
 
 export type I18n = {

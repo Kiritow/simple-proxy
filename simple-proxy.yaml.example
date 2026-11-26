@@ -1,0 +1,42 @@
+# The configuration of simple-proxy itself: who administers the console, and
+# how users sign in. Sites are managed in the console, not here.
+#
+# simple-proxy reads simple-proxy.yaml next to its database (-db) when it
+# starts, e.g. /data/simple-proxy.yaml in the Docker image, or the file given
+# with -config. It holds secrets, so keep it readable by simple-proxy only.
+
+# The super administrators. They are always administrators: the console
+# cannot change their role, disable or delete them. Removing one from this
+# list takes away their role on the next start.
+admins:
+  # An account signing in with a password, created if it does not exist.
+  - username: admin
+    # Its password, or a hash of it from `simple-proxy hash-password`. If
+    # set, it is the account's password and cannot be changed in the
+    # console. If not set, a new account gets a random password, which is
+    # logged once, and changed in the console.
+    password: change-me-please
+  # An account signing in with the OIDC provider below, by the email address
+  # the provider verified, or by its subject (the "sub" claim).
+  # - email: ops@example.com
+  # - subject: 248289761001
+
+# Signing in with a username and password; defaults to true. Turn it off to
+# sign in with the OIDC provider only.
+# password_login: false
+
+# The reverse proxies in front of the console, as addresses or networks,
+# whose X-Forwarded-For header tells the address of clients. Failed attempts
+# to sign in are limited by address, which clients share otherwise.
+# trusted_proxies: [127.0.0.1, 10.0.0.0/8]
+
+# An OpenID Connect provider to sign in with, e.g. Keycloak, Authentik,
+# Google or Microsoft Entra ID. Register simple-proxy with it as a client for
+# the authorization code flow, with redirect_url as its redirect URI.
+# oidc:
+#   name: Keycloak                       # on the sign-in button; defaults to the issuer's host
+#   issuer: https://id.example.com/realms/main
+#   client_id: simple-proxy
+#   client_secret: "..."                 # may be empty for public clients, as PKCE protects the flow
+#   redirect_url: https://proxy.example.com/api/auth/oidc/callback
+#   scopes: [openid, profile, email]     # the default

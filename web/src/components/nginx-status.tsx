@@ -26,6 +26,7 @@ import {
   type ApiError,
   type Status,
 } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 import { formatAgo } from "@/lib/format"
 import type { Resource } from "@/lib/hooks"
 import { useI18n } from "@/lib/i18n"
@@ -85,6 +86,7 @@ export function StatusDialog({
   status: Resource<Status>
 }) {
   const { t, lang } = useI18n()
+  const all = useAuth().me.permissions.all_sites
   const [tab, setTab] = useState("status")
   const [applying, setApplying] = useState(false)
   const s = status.data
@@ -118,10 +120,12 @@ export function StatusDialog({
           </DialogDescription>
         </DialogHeader>
         <Tabs value={tab} onValueChange={setTab} className="min-h-0 flex-1">
-          <TabsList>
-            <TabsTrigger value="status">{t.status.statusTab}</TabsTrigger>
-            <TabsTrigger value="config">{t.status.configTab}</TabsTrigger>
-          </TabsList>
+          {all && (
+            <TabsList>
+              <TabsTrigger value="status">{t.status.statusTab}</TabsTrigger>
+              <TabsTrigger value="config">{t.status.configTab}</TabsTrigger>
+            </TabsList>
+          )}
           <TabsContent value="status" className="flex flex-col gap-4 pt-2">
             {s?.error && (
               <Alert variant="destructive">
@@ -177,10 +181,10 @@ export function StatusDialog({
             )}
           </TabsContent>
           <TabsContent value="config" className="min-h-0 pt-2">
-            {tab === "config" && <GeneratedConfig />}
+            {all && tab === "config" && <GeneratedConfig />}
           </TabsContent>
         </Tabs>
-        {s?.applies && (
+        {s?.applies && all && (
           <DialogFooter>
             <Button onClick={apply} disabled={applying}>
               {applying ? <Spinner /> : <RefreshCw />}

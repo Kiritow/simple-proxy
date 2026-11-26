@@ -3,11 +3,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -21,12 +24,15 @@ import (
 
 	"github.com/kiritow/simple-proxy/internal/acme"
 	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/auth"
 	"github.com/kiritow/simple-proxy/internal/buildinfo"
 	"github.com/kiritow/simple-proxy/internal/certs"
 	"github.com/kiritow/simple-proxy/internal/manager"
 	"github.com/kiritow/simple-proxy/internal/nginx"
 	"github.com/kiritow/simple-proxy/internal/store"
 	"github.com/kiritow/simple-proxy/internal/web"
+
+	"golang.org/x/term"
 )
 
 //go:embed config.yaml.example
@@ -34,7 +40,12 @@ var exampleConfig []byte
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := run(ctx, os.Args[1:], os.Stderr)
+	var err error
+	if len(os.Args) > 1 && os.Args[1] == "hash-password" {
+		err = hashPassword(os.Stdin, os.Stdout, os.Stderr)
+	} else {
+		err = run(ctx, os.Args[1:], os.Stderr)
+	}
 	stop()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "simple-proxy:", err)
@@ -46,7 +57,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	flags := flag.NewFlagSet("simple-proxy", flag.ExitOnError)
 	flags.SetOutput(stderr)
 	addr := flags.String("addr", "127.0.0.1:8080", "`address` to serve HTTP on")
-	dbPath := flags.String("db", defaultDBPath(), "`path` of the SQLite database storing the sites, certificates and CAs")
+	dbPath := flags.String("db", defaultDBPath(), "`path` of the SQLite database storing the sites, certificates, CAs and users")
+	configPath := flags.String("config", "", "`path` of the configuration file: super administrators and how users sign in (default: simple-proxy.yaml next to -db, if it exists)")
 	certDir := flags.String("cert-dir", "", "`directory` where uploaded and signed certificates are written for nginx (default: certs next to -db)")
 	nginxConf := flags.String("nginx-conf", "", "`path` of the nginx configuration file to manage, e.g. /etc/nginx/conf.d/proxy.conf; if empty, sites are only stored")
 	nginxTest := flags.String("nginx-test", "nginx -t", "`command` testing nginx's configuration")
@@ -69,12 +81,25 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	authConfig, loaded, err := loadConfig(*configPath, *dbPath)
+	if err != nil {
+		return err
+	}
+	if loaded != "" {
+		logger.Info("loaded the configuration", "path", loaded)
+	} else {
+		logger.Info("no configuration file: list the super administrators in one", "path", filepath.Join(filepath.Dir(*dbPath), configFile))
+	}
 	sites, err := store.Open(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
 	defer sites.Close()
 	logger.Info("opened database", "path", *dbPath)
+	users, err := auth.New(ctx, auth.Options{Store: sites, Config: authConfig, Logger: logger})
+	if err != nil {
+		return err
+	}
 
 	gen := &nginx.Generator{
 		FallbackCert: *fallbackCert,
@@ -121,6 +146,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	srv := &http.Server{
 		Handler: web.NewHandler(web.Options{
 			Manager: m,
+			Auth:    users,
 			Example: exampleConfig,
 			Logger:  logger,
 			Build:   build,
@@ -147,6 +173,59 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(ctx)
+}
+
+// configFile is the name of the configuration file looked for next to the
+// database.
+const configFile = "simple-proxy.yaml"
+
+// loadConfig loads the configuration file at path, or if empty,
+// simple-proxy.yaml next to the database, if it exists. It returns the path
+// of the file loaded, if any.
+func loadConfig(path, dbPath string) (auth.Config, string, error) {
+	if path != "" {
+		cfg, err := auth.LoadConfig(path)
+		return cfg, path, err
+	}
+	path = filepath.Join(filepath.Dir(dbPath), configFile)
+	cfg, err := auth.LoadConfig(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return auth.Config{}, "", nil
+	}
+	return cfg, path, err
+}
+
+// hashPassword reads a password, and prints its hash for the configuration
+// file. On a terminal, the password is asked for twice, without echoing it.
+func hashPassword(stdin *os.File, stdout, stderr io.Writer) error {
+	var password string
+	if fd := int(stdin.Fd()); term.IsTerminal(fd) {
+		var entered [2]string
+		for i, prompt := range []string{"Password: ", "Again: "} {
+			fmt.Fprint(stderr, prompt)
+			b, err := term.ReadPassword(fd)
+			fmt.Fprintln(stderr)
+			if err != nil {
+				return err
+			}
+			entered[i] = string(b)
+		}
+		if entered[0] != entered[1] {
+			return errors.New("the passwords differ")
+		}
+		password = entered[0]
+	} else {
+		line, err := bufio.NewReader(stdin).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		password = strings.TrimRight(line, "\r\n")
+	}
+	if len([]rune(password)) < auth.MinPasswordLength {
+		return fmt.Errorf("the password needs at least %d characters", auth.MinPasswordLength)
+	}
+	_, err := fmt.Fprintln(stdout, auth.HashPassword(password))
+	return err
 }
 
 // defaultDBPath returns sites.db in the directory of the executable, so that

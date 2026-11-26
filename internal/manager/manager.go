@@ -274,7 +274,11 @@ type Preview struct {
 // Preview checks a site like CreateSite, if id is empty, or UpdateSite, and
 // returns what saving it would change, without changing anything. Unlike
 // UpdateSite, it does not check generations, but reports the current one.
-func (m *Manager) Preview(ctx context.Context, id string, cfg json.RawMessage) (Preview, error) {
+//
+// If visible is not nil, the configuration before and after saving only
+// has the sites whose IDs it reports, and the site saved, for users who may
+// not see the others. The site is checked against all sites regardless.
+func (m *Manager) Preview(ctx context.Context, id string, cfg json.RawMessage, visible func(id string) bool) (Preview, error) {
 	current, err := m.load(ctx)
 	if err != nil {
 		return Preview{}, err
@@ -300,6 +304,11 @@ func (m *Manager) Preview(ctx context.Context, id string, cfg json.RawMessage) (
 		next.sites[i] = site
 	}
 
+	if visible != nil {
+		hidden := func(s store.Site) bool { return s.ID != id && !visible(s.ID) }
+		current.sites = slices.DeleteFunc(slices.Clone(current.sites), hidden)
+		next.sites = slices.DeleteFunc(next.sites, hidden)
+	}
 	now := time.Now()
 	if p.Current, err = m.renderAt(ctx, current, now); err != nil {
 		return Preview{}, err

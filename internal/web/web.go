@@ -19,11 +19,14 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/kiritow/simple-proxy/internal/acme"
 	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/auth"
 	"github.com/kiritow/simple-proxy/internal/buildinfo"
 	"github.com/kiritow/simple-proxy/internal/certs"
 	"github.com/kiritow/simple-proxy/internal/config"
@@ -49,6 +52,8 @@ var dist embed.FS
 // Options configure the handler returned by NewHandler.
 type Options struct {
 	Manager *manager.Manager
+	// Auth signs users in, and tells what they may do. It is required.
+	Auth    *auth.Service
 	Example []byte // the example configuration
 	Logger  *slog.Logger
 	Build   buildinfo.Info // what the server was built from
@@ -56,6 +61,20 @@ type Options struct {
 
 // NewHandler returns a handler serving the browser UI at / and this API:
 //
+//	GET    /api/auth/config    how users sign in: {"password": true, "registration": true, "oidc": {"name": "..."}}
+//	POST   /api/auth/login     sign in: {"username": "...", "password": "..."} gives {"user": {...}, "permissions": {...}}
+//	POST   /api/auth/register  sign up: {"username": "...", "password": "...", "display_name": "..."}, likewise
+//	POST   /api/auth/logout    sign out
+//	GET    /api/auth/me        the signed-in user and what they may do: {"user": {...}, "permissions": {...}}
+//	POST   /api/auth/password  change your password: {"current": "...", "password": "..."}
+//	GET    /api/auth/oidc/login     sign in with the OIDC provider
+//	GET    /api/auth/oidc/callback  where the provider sends users back; failures go to the console with ?login_error=code
+//	GET    /api/users          the users: {"users": [{"id": "...", "username": "...", "role": "site_operator", "sites": ["..."], ...}]}
+//	POST   /api/users          add one: {"username": "...", "password": "...", "role": "...", "sites": [...], ...}
+//	PATCH  /api/users/{id}     change one: {"role": "...", "sites": [...], "disabled": true, "password": "...", ...}
+//	DELETE /api/users/{id}     delete one
+//	GET    /api/settings       {"registration": true}: whether new accounts may sign up
+//	PUT    /api/settings       change them
 //	GET    /api/sites          the sites: {"sites": [{"id": "...", "config": {...}, "generation": 1, "created_at": "...", "updated_at": "..."}]}
 //	POST   /api/sites          add a site: {"config": {...}}
 //	PUT    /api/sites          replace all sites: {"configs": [{...}]}
@@ -82,6 +101,12 @@ type Options struct {
 //	POST   /api/generate      the configuration generated from the body
 //	GET    /api/example       an example configuration
 //
+// Requests other than signing in need a session, whose cookie signing in
+// sets, or a username and password with HTTP Basic auth; otherwise they fail
+// with 401. What users may do depends on their role, see auth.Permissions;
+// other requests fail with 403. Site operators only see and change the sites
+// assigned to them, and previews of those only.
+//
 // A site's config is one entry of servers in the configuration schema, in
 // JSON. Changing sites applies them to nginx; if nginx rejects the result,
 // nothing changes and the response is 502 with nginx's output.
@@ -97,11 +122,12 @@ type Options struct {
 //
 // Errors are reported as
 //
-//	{"message": "...", "fields": [{"field": "servers[0].default.port", "message": "...", "code": "invalid_port", "value": "70000"}], "output": "..."}
+//	{"message": "...", "code": "forbidden", "fields": [{"field": "servers[0].default.port", "message": "...", "code": "invalid_port", "value": "70000"}], "output": "..."}
 //
-// where code is a config.ProblemCode, a certs.ProblemCode, or
-// "cert_not_found", and identifies the problem for clients that describe it
-// in their own words. Problems with a submitted site refer to it as
+// where the code of a field is a config.ProblemCode, a certs.ProblemCode, an
+// auth.ProblemCode, or "cert_not_found", and identifies the problem for
+// clients that describe it in their own words; the code of the error is that
+// of an auth.Error. Problems with a submitted site refer to it as
 // servers[0]; those with uploads and signing requests name their fields. Only
 // validate and generate answer in plain text, unless the request accepts
 // application/json. Private keys are never sent.
@@ -119,46 +145,74 @@ func NewHandler(opts Options) http.Handler {
 		panic(err) // dist is embedded, so this cannot happen
 	}
 	files := http.FileServerFS(ui)
-	h := &handler{m: opts.Manager, log: opts.Logger, build: opts.Build}
+	h := &handler{m: opts.Manager, auth: opts.Auth, log: opts.Logger, build: opts.Build}
+	g := h.guard
 
 	mux := http.NewServeMux()
 	// Only the index page and the build output are routed to the file server,
 	// so that requests with the wrong method to the API get a 405.
 	mux.Handle("GET /{$}", files)
 	mux.Handle("GET /assets/", immutable(files))
-	mux.HandleFunc("GET /api/example", func(w http.ResponseWriter, _ *http.Request) {
+
+	mux.Handle("GET /api/auth/config", g(public, h.authConfig))
+	mux.Handle("POST /api/auth/login", g(public, h.login))
+	mux.Handle("POST /api/auth/register", g(public, h.register))
+	mux.Handle("POST /api/auth/logout", g(public, h.logout))
+	mux.Handle("GET /api/auth/oidc/login", g(public, h.oidcLogin))
+	mux.Handle("GET /api/auth/oidc/callback", g(public, h.oidcCallback))
+	mux.Handle("GET /api/auth/me", g(account, h.me))
+	mux.Handle("POST /api/auth/password", g(account, h.changePassword))
+
+	mux.Handle("GET /api/users", g(usersAccess, h.listUsers))
+	mux.Handle("POST /api/users", g(usersAccess, h.createUser))
+	mux.Handle("PATCH /api/users/{id}", g(usersAccess, h.updateUser))
+	mux.Handle("DELETE /api/users/{id}", g(usersAccess, h.deleteUser))
+	mux.Handle("GET /api/settings", g(usersAccess, h.settings))
+	mux.Handle("PUT /api/settings", g(usersAccess, h.updateSettings))
+
+	mux.Handle("GET /api/example", g(sitesAccess, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write(opts.Example)
-	})
-	mux.HandleFunc("GET /api/sites", h.listSites)
-	mux.HandleFunc("POST /api/sites", h.createSite)
-	mux.HandleFunc("PUT /api/sites", h.replaceSites)
-	mux.HandleFunc("POST /api/sites/preview", h.previewSite)
-	mux.HandleFunc("POST /api/sites/raw", h.rawSite)
-	mux.HandleFunc("PUT /api/sites/{id}", h.updateSite)
-	mux.HandleFunc("DELETE /api/sites/{id}", h.deleteSite)
-	mux.HandleFunc("GET /api/status", h.status)
-	mux.HandleFunc("POST /api/apply", h.apply)
-	mux.HandleFunc("GET /api/nginx.conf", h.nginxConf)
-	mux.HandleFunc("GET /api/certificates", h.certificates)
-	mux.HandleFunc("POST /api/certificates", h.issueCertificate)
-	mux.HandleFunc("POST /api/certificates/upload", h.uploadCertificate)
-	mux.HandleFunc("POST /api/certificates/sign", h.signCertificate)
-	mux.HandleFunc("POST /api/certificates/upload/preview", h.previewUpload(false))
-	mux.HandleFunc("POST /api/certificates/sign/preview", h.previewSign)
-	mux.HandleFunc("POST /api/authorities/preview", h.previewUpload(true))
-	mux.HandleFunc("GET /api/certificates/{name}", h.certificate)
-	mux.HandleFunc("PATCH /api/certificates/{name}", h.renameCertificate)
-	mux.HandleFunc("DELETE /api/certificates/{name}", h.deleteCertificate)
-	mux.HandleFunc("GET /api/authorities", h.authorities)
-	mux.HandleFunc("POST /api/authorities", h.addAuthority)
-	mux.HandleFunc("GET /api/authorities/{name}", h.authority)
-	mux.HandleFunc("PATCH /api/authorities/{name}", h.renameAuthority)
-	mux.HandleFunc("DELETE /api/authorities/{name}", h.deleteAuthority)
-	mux.HandleFunc("GET /api/authorities/{name}/cert.pem", h.authorityCert)
-	mux.HandleFunc("POST /api/validate", h.validate)
-	mux.HandleFunc("POST /api/generate", h.generate)
-	return mux
+	}))
+	mux.Handle("GET /api/sites", g(sitesAccess, h.listSites))
+	mux.Handle("POST /api/sites", g(allSites, h.createSite))
+	mux.Handle("PUT /api/sites", g(allSites, h.replaceSites))
+	mux.Handle("POST /api/sites/preview", g(sitesAccess, h.previewSite))
+	mux.Handle("POST /api/sites/raw", g(sitesAccess, h.rawSite))
+	mux.Handle("PUT /api/sites/{id}", g(sitesAccess, h.updateSite))
+	mux.Handle("DELETE /api/sites/{id}", g(allSites, h.deleteSite))
+	mux.Handle("GET /api/status", g(sitesAccess, h.status))
+	mux.Handle("POST /api/apply", g(allSites, h.apply))
+	mux.Handle("GET /api/nginx.conf", g(allSites, h.nginxConf))
+	mux.Handle("GET /api/certificates", g(sitesAccess, h.certificates))
+	mux.Handle("POST /api/certificates", g(certsAccess, h.issueCertificate))
+	mux.Handle("POST /api/certificates/upload", g(certsAccess, h.uploadCertificate))
+	mux.Handle("POST /api/certificates/sign", g(certsAccess, h.signCertificate))
+	mux.Handle("POST /api/certificates/upload/preview", g(certsAccess, h.previewUpload(false)))
+	mux.Handle("POST /api/certificates/sign/preview", g(certsAccess, h.previewSign))
+	mux.Handle("POST /api/authorities/preview", g(certsAccess, h.previewUpload(true)))
+	mux.Handle("GET /api/certificates/{name}", g(sitesAccess, h.certificate))
+	mux.Handle("PATCH /api/certificates/{name}", g(certsAccess, h.renameCertificate))
+	mux.Handle("DELETE /api/certificates/{name}", g(certsAccess, h.deleteCertificate))
+	mux.Handle("GET /api/authorities", g(sitesAccess, h.authorities))
+	mux.Handle("POST /api/authorities", g(certsAccess, h.addAuthority))
+	mux.Handle("GET /api/authorities/{name}", g(sitesAccess, h.authority))
+	mux.Handle("PATCH /api/authorities/{name}", g(certsAccess, h.renameAuthority))
+	mux.Handle("DELETE /api/authorities/{name}", g(certsAccess, h.deleteAuthority))
+	mux.Handle("GET /api/authorities/{name}/cert.pem", g(sitesAccess, h.authorityCert))
+	mux.Handle("POST /api/validate", g(sitesAccess, h.validate))
+	mux.Handle("POST /api/generate", g(sitesAccess, h.generate))
+
+	// Browsers must not be tricked into changing anything for other sites,
+	// with the session cookie: requests other than GET must come from the
+	// console itself.
+	cop := http.NewCrossOriginProtection()
+	if console := opts.Auth.OIDCConsoleURL(); console != "" {
+		if u, err := url.Parse(console); err == nil {
+			_ = cop.AddTrustedOrigin(u.Scheme + "://" + u.Host)
+		}
+	}
+	return cop.Handler(mux)
 }
 
 // immutable marks responses as cacheable forever, which is safe for Vite's
@@ -172,6 +226,7 @@ func immutable(next http.Handler) http.Handler {
 
 type handler struct {
 	m     *manager.Manager
+	auth  *auth.Service
 	log   *slog.Logger
 	build buildinfo.Info
 }
@@ -189,15 +244,20 @@ func (h *handler) listSites(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	sites := make([]siteResponse, len(infos))
-	for i, info := range infos {
-		sites[i] = siteResponse{Site: info.Site}
+	u := userOf(r).user
+	sites := []siteResponse{}
+	for _, info := range infos {
+		if !auth.CanManageSite(u, info.ID) {
+			continue
+		}
+		site := siteResponse{Site: info.Site}
 		if info.Problem != nil {
-			sites[i].Problems = describe(info.Problem).Fields
-			if len(sites[i].Problems) == 0 {
-				sites[i].Problems = []fieldError{{Message: info.Problem.Error()}}
+			site.Problems = describe(info.Problem).Fields
+			if len(site.Problems) == 0 {
+				site.Problems = []fieldError{{Message: info.Problem.Error()}}
 			}
 		}
+		sites = append(sites, site)
 	}
 	writeJSON(w, http.StatusOK, map[string][]siteResponse{"sites": sites})
 }
@@ -226,6 +286,10 @@ func (h *handler) updateSite(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) || !checkObject(w, req.Config) {
 		return
 	}
+	if err := h.checkSiteChange(r, r.PathValue("id"), req.Config); err != nil {
+		h.fail(w, r, err)
+		return
+	}
 	site, err := h.m.UpdateSite(r.Context(), r.PathValue("id"), req.Generation, req.Config)
 	if err != nil {
 		h.fail(w, r, err)
@@ -239,7 +303,17 @@ func (h *handler) previewSite(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) || !checkObject(w, req.Config) {
 		return
 	}
-	p, err := h.m.Preview(r.Context(), req.ID, req.Config)
+	// Users who may not see all sites only preview the changes to theirs.
+	u := userOf(r).user
+	var visible func(id string) bool
+	if !auth.PermissionsOf(u.Role).AllSites {
+		if err := h.checkSiteChange(r, req.ID, req.Config); err != nil {
+			h.fail(w, r, err)
+			return
+		}
+		visible = func(id string) bool { return auth.CanManageSite(u, id) }
+	}
+	p, err := h.m.Preview(r.Context(), req.ID, req.Config, visible)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -263,6 +337,60 @@ func (h *handler) rawSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"raw": raw})
+}
+
+// checkSiteChange checks that the user of r may change the site with the
+// given ID to cfg. Users who manage all sites may change anything. Site
+// operators may only change their own sites, and not their raw
+// configuration or extra directives: nginx runs those with its privileges,
+// e.g. to listen on other addresses or write files, which reaches beyond
+// their sites.
+func (h *handler) checkSiteChange(r *http.Request, id string, cfg json.RawMessage) error {
+	u := userOf(r).user
+	if auth.PermissionsOf(u.Role).AllSites {
+		return nil
+	}
+	if !auth.CanManageSite(u, id) {
+		return auth.ErrForbidden
+	}
+	sites, err := h.m.Sites(r.Context())
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(sites, func(s manager.SiteInfo) bool { return s.ID == id })
+	if i < 0 {
+		return manager.ErrNotFound
+	}
+	proposed, err := directivesOf(cfg)
+	if err != nil {
+		return nil // saving reports the problems
+	}
+	current, _ := directivesOf(sites[i].Config) // none if invalid
+	if current != proposed {
+		return auth.ErrDirectivesRestricted
+	}
+	return nil
+}
+
+// directivesOf returns the raw configuration and the extra directives of a
+// site's config, by location path, as a string to compare.
+func directivesOf(cfg json.RawMessage) (string, error) {
+	s, err := config.DecodeServer(cfg)
+	if err != nil {
+		s = &config.Server{}
+	}
+	d := struct {
+		Raw       *string
+		Server    []config.Directive
+		Locations map[string][][]config.Directive
+	}{Raw: s.Raw, Server: s.Options, Locations: map[string][][]config.Directive{}}
+	for _, l := range append([]config.Location{s.Default}, s.Locations...) {
+		if len(l.Options) > 0 {
+			d.Locations[l.Path] = append(d.Locations[l.Path], l.Options)
+		}
+	}
+	text, _ := json.Marshal(d)
+	return string(text), err
 }
 
 func (h *handler) deleteSite(w http.ResponseWriter, r *http.Request) {
@@ -407,6 +535,8 @@ func (h *handler) certificate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
+	u := userOf(r).user
+	d.Sites = slices.DeleteFunc(d.Sites, func(s manager.SiteRef) bool { return !auth.CanManageSite(u, s.ID) })
 	writeJSON(w, http.StatusOK, d)
 }
 
@@ -574,9 +704,17 @@ func (h *handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		fieldErr  *config.FieldError
 		syntax    *config.SyntaxError
 		applyErr  *apply.Error
+		authErr   *auth.Error
 	)
 	status := http.StatusInternalServerError
 	switch {
+	case errors.As(err, &authErr):
+		status = authStatus[authErr.Code]
+		if status == 0 {
+			status = http.StatusForbidden
+		}
+	case errors.Is(err, auth.ErrUserNotFound):
+		status = http.StatusNotFound
 	case errors.Is(err, nginx.ErrCertNotFound):
 		status = http.StatusUnprocessableEntity
 	case errors.As(err, &fieldErrs), errors.As(err, &fieldErr), errors.As(err, &syntax):
@@ -591,6 +729,16 @@ func (h *handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		h.log.ErrorContext(r.Context(), "handling "+r.Method+" "+r.URL.Path, "err", err)
 	}
 	writeError(w, r, status, err)
+}
+
+// authStatus is the status of the auth.Errors other than 403 Forbidden.
+var authStatus = map[string]int{
+	auth.ErrUnauthenticated.Code:    http.StatusUnauthorized,
+	auth.ErrInvalidCredentials.Code: http.StatusUnauthorized,
+	auth.ErrTooManyAttempts.Code:    http.StatusTooManyRequests,
+	auth.ErrLastAdmin.Code:          http.StatusBadRequest,
+	auth.ErrOIDCUnavailable.Code:    http.StatusNotFound,
+	auth.ErrOIDCFailed.Code:         http.StatusBadGateway,
 }
 
 // readBody returns the request body. If it cannot be read or is too large,
@@ -649,6 +797,7 @@ func wantsJSON(r *http.Request) bool {
 
 type errorResponse struct {
 	Message string       `json:"message"`
+	Code    string       `json:"code,omitempty"` // of an auth.Error
 	Fields  []fieldError `json:"fields,omitempty"`
 	Output  string       `json:"output,omitempty"` // of nginx or acme.sh
 }
@@ -666,6 +815,10 @@ const certNotFound = "cert_not_found"
 // describe returns the response describing err.
 func describe(err error) errorResponse {
 	resp := errorResponse{Message: err.Error()}
+	var authErr *auth.Error
+	if errors.As(err, &authErr) {
+		resp.Code = authErr.Code
+	}
 	var applyErr *apply.Error
 	if errors.As(err, &applyErr) {
 		resp.Message = applyErr.Step + " failed: " + applyErr.Err.Error()
@@ -683,11 +836,14 @@ func describe(err error) errorResponse {
 		f := fieldError{Field: fe.Field, Message: fe.Err.Error()}
 		var problem *config.Problem
 		var certProblem *certs.Problem
+		var authProblem *auth.Problem
 		switch {
 		case errors.As(fe.Err, &problem):
 			f.Code, f.Value = string(problem.Code), problem.Value
 		case errors.As(fe.Err, &certProblem):
 			f.Code, f.Value = string(certProblem.Code), certProblem.Value
+		case errors.As(fe.Err, &authProblem):
+			f.Code, f.Value = string(authProblem.Code), authProblem.Value
 		case errors.Is(fe.Err, nginx.ErrCertNotFound):
 			f.Code = certNotFound
 		}

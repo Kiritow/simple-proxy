@@ -8,6 +8,7 @@
 /localdata/
 /config.yaml
 /config.yml
+/simple-proxy.yaml
 /proxy.conf
 *.db
 *.db-journal

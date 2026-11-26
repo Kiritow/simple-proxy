@@ -1,9 +1,11 @@
 package main
 
 import (
+	"os"
 	"slices"
 	"testing"
 
+	"github.com/kiritow/simple-proxy/internal/auth"
 	"github.com/kiritow/simple-proxy/internal/config"
 	"github.com/kiritow/simple-proxy/internal/nginx"
 )
@@ -17,6 +19,21 @@ func TestExampleConfig(t *testing.T) {
 	}
 	if _, err := new(nginx.Generator).Generate(t.Context(), cfg); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The example configuration file must be valid, to be copied as is.
+func TestExampleSettings(t *testing.T) {
+	data, err := os.ReadFile("simple-proxy.yaml.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := auth.ParseConfig(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Admins) != 1 || cfg.Admins[0].Username != "admin" || !cfg.PasswordEnabled() {
+		t.Errorf("example configuration = %+v", cfg)
 	}
 }
 

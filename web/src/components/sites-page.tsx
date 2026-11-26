@@ -88,6 +88,7 @@ import {
   type Status,
   type StoredSite,
 } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 import { formatAgo, formatDateTime } from "@/lib/format"
 import { useNow, useStoredState, type Resource } from "@/lib/hooks"
 import { describeProblem, useI18n } from "@/lib/i18n"
@@ -145,6 +146,8 @@ export function SitesPage({
   onChanged: () => void // after sites changed
 }) {
   const { t } = useI18n()
+  // Site operators change only the sites given to them.
+  const all = useAuth().me.permissions.all_sites
   const [query, setQuery] = useState("")
   const [view, setView] = useStoredState<View>(
     "simple-proxy:sites-view",
@@ -266,13 +269,15 @@ export function SitesPage({
         description={t.sites.description}
         actions={
           <>
-            <Button
-              variant="outline"
-              onClick={() => setImporting({ key: Date.now() })}
-            >
-              <FileUp />
-              {t.sites.import}
-            </Button>
+            {all && (
+              <Button
+                variant="outline"
+                onClick={() => setImporting({ key: Date.now() })}
+              >
+                <FileUp />
+                {t.sites.import}
+              </Button>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" disabled={rows.length === 0}>
@@ -293,18 +298,22 @@ export function SitesPage({
                     )
                   }
                 />
-                <MenuItem
-                  icon={<FileCode />}
-                  title={t.sites.exportNginx}
-                  text={t.sites.exportNginxText}
-                  onSelect={exportNginx}
-                />
+                {all && (
+                  <MenuItem
+                    icon={<FileCode />}
+                    title={t.sites.exportNginx}
+                    text={t.sites.exportNginxText}
+                    onSelect={exportNginx}
+                  />
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
-            <Button onClick={() => edit(null)}>
-              <Plus />
-              {t.sites.add}
-            </Button>
+            {all && (
+              <Button onClick={() => edit(null)}>
+                <Plus />
+                {t.sites.add}
+              </Button>
+            )}
           </>
         }
       />
@@ -331,6 +340,16 @@ export function SitesPage({
             <Spinner />
           </div>
         )
+      ) : rows.length === 0 && !all ? (
+        <Empty className="border border-dashed">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <Globe />
+            </EmptyMedia>
+            <EmptyTitle>{t.sites.noneGivenTitle}</EmptyTitle>
+            <EmptyDescription>{t.sites.noneGivenText}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : rows.length === 0 ? (
         <Empty className="border border-dashed">
           <EmptyHeader>
@@ -488,7 +507,9 @@ export function SitesPage({
                           name={row.name}
                           busy={pending.has(row.stored.id)}
                           onEdit={() => edit(row.stored)}
-                          onRemove={() => remove(row.stored, row.site)}
+                          onRemove={
+                            all ? () => remove(row.stored, row.site) : undefined
+                          }
                         />
                       </TableCell>
                     </TableRow>
@@ -541,7 +562,9 @@ export function SitesPage({
                         name={row.name}
                         busy={pending.has(row.stored.id)}
                         onEdit={() => edit(row.stored)}
-                        onRemove={() => remove(row.stored, row.site)}
+                        onRemove={
+                          all ? () => remove(row.stored, row.site) : undefined
+                        }
                       />
                     </CardAction>
                   </CardHeader>
@@ -648,7 +671,8 @@ function EnabledSwitch({
   )
 }
 
-// SiteActions edits or deletes a site, once confirmed.
+// SiteActions edits or deletes a site, once confirmed, if onRemove is
+// given.
 function SiteActions({
   name,
   busy,
@@ -658,7 +682,7 @@ function SiteActions({
   name: string
   busy: boolean // while the site changes
   onEdit: () => void
-  onRemove: () => void
+  onRemove?: () => void
 }) {
   const { t } = useI18n()
   return (
@@ -666,16 +690,18 @@ function SiteActions({
       <IconButton label={t.sites.edit} onClick={onEdit}>
         <Pencil />
       </IconButton>
-      <ConfirmButton
-        title={t.sites.removeTitle(name)}
-        description={t.sites.removeText}
-        action={t.sites.removeAction}
-        onConfirm={onRemove}
-      >
-        <IconButton label={t.sites.remove} disabled={busy}>
-          <Trash2 />
-        </IconButton>
-      </ConfirmButton>
+      {onRemove && (
+        <ConfirmButton
+          title={t.sites.removeTitle(name)}
+          description={t.sites.removeText}
+          action={t.sites.removeAction}
+          onConfirm={onRemove}
+        >
+          <IconButton label={t.sites.remove} disabled={busy}>
+            <Trash2 />
+          </IconButton>
+        </ConfirmButton>
+      )}
     </div>
   )
 }

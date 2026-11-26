@@ -69,6 +69,7 @@ import {
   type Status,
   type StoredSite,
 } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 import {
   noProblems,
   toProblems,
@@ -132,6 +133,11 @@ export function SiteDialog({
   onSaved: () => void
 }) {
   const { t } = useI18n()
+  const { permissions } = useAuth().me
+  const canIssue = permissions.certificates
+  // Site operators may not change raw configurations or extra directives,
+  // which reach beyond their sites.
+  const canDirect = permissions.all_sites
   const [site, setSite] = useState<Site>(
     () => (stored ? fromStored(stored) : initial) ?? newSite()
   )
@@ -388,7 +394,8 @@ export function SiteDialog({
                   onClick={() =>
                     site.raw !== null && setConfirmingBuilder(true)
                   }
-                  disabled={converting}
+                  disabled={converting || !canDirect}
+                  title={canDirect ? undefined : t.site.directivesRestricted}
                 >
                   {t.site.modeBuilder}
                 </Button>
@@ -397,7 +404,8 @@ export function SiteDialog({
                   variant={site.raw !== null ? "secondary" : "ghost"}
                   aria-pressed={site.raw !== null}
                   onClick={() => void toRaw()}
-                  disabled={converting}
+                  disabled={converting || !canDirect}
+                  title={canDirect ? undefined : t.site.directivesRestricted}
                 >
                   {converting && <Spinner />}
                   {t.site.modeRaw}
@@ -409,6 +417,7 @@ export function SiteDialog({
                   value={site.raw}
                   onChange={(raw) => patch({ raw })}
                   error={problems.byKey.get(`${key}.raw`)}
+                  readOnly={!canDirect}
                   enabled={site.enabled}
                   onEnabledChange={(enabled) => patch({ enabled })}
                   enabledId={`${key}.enabled`}
@@ -517,7 +526,7 @@ export function SiteDialog({
                           error={problems.byKey.get(`${key}.cert_name`)}
                           onChange={(certName) => patch({ certName })}
                           onRequest={
-                            status?.acme
+                            status?.acme && canIssue
                               ? () => setIssuing({ key: Date.now() })
                               : undefined
                           }
@@ -568,6 +577,7 @@ export function SiteDialog({
                         onChange={(options) => patch({ options })}
                         problems={problems}
                         placeholder="client_max_body_size 64m"
+                        readOnly={!canDirect}
                       />
                       <DirectiveList
                         owner={root}
@@ -577,6 +587,7 @@ export function SiteDialog({
                         onChange={(options) => patchRoot({ options })}
                         problems={problems}
                         placeholder="proxy_read_timeout 300s"
+                        readOnly={!canDirect}
                       />
                     </FieldGroup>
                   </TabsContent>
@@ -710,6 +721,7 @@ function RawEditor({
   value,
   onChange,
   error,
+  readOnly,
   enabled,
   onEnabledChange,
   enabledId,
@@ -718,6 +730,7 @@ function RawEditor({
   value: string
   onChange: (value: string) => void
   error?: FieldProblem
+  readOnly: boolean // for site operators, who may only turn it on and off
   enabled: boolean
   onEnabledChange: (enabled: boolean) => void
   enabledId: string
@@ -732,6 +745,7 @@ function RawEditor({
           id={id}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          readOnly={readOnly}
           spellCheck={false}
           wrap="off"
           aria-invalid={message ? true : undefined}
@@ -740,7 +754,9 @@ function RawEditor({
         {message ? (
           <FieldError>{message}</FieldError>
         ) : (
-          <FieldDescription>{t.site.rawHint}</FieldDescription>
+          <FieldDescription>
+            {readOnly ? t.site.directivesRestricted : t.site.rawHint}
+          </FieldDescription>
         )}
       </Field>
       <ToggleCard
@@ -901,6 +917,7 @@ function RouteCard({
   onRemove: () => void
 }) {
   const { t } = useI18n()
+  const canDirect = useAuth().me.permissions.all_sites
   const key = routeKey(site, route)
   const error = (field: string) => problems.byKey.get(`${key}.${field}`)
   const host = route.host || site.root.host || DEFAULT_HOST
@@ -969,6 +986,7 @@ function RouteCard({
             onChange={(options) => onChange({ options })}
             problems={problems}
             placeholder="proxy_read_timeout 300s"
+            readOnly={!canDirect}
           />
         </FieldGroup>
       </CardContent>

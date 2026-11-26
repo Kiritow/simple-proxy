@@ -1,5 +1,6 @@
-// Package store keeps the sites edited in the UI, and the certificates and
-// certificate authorities uploaded to it, in an SQLite database.
+// Package store keeps the sites edited in the UI, the certificates and
+// certificate authorities uploaded to it, and the users of the console with
+// their sessions, in an SQLite database.
 package store
 
 import (
@@ -90,7 +91,9 @@ type Store struct {
 // Open opens the database at path, creating it if it does not exist. It
 // holds private keys, so only its owner may read it.
 func Open(ctx context.Context, path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
+	// Foreign keys remove the assignments of deleted sites and users, and the
+	// sessions of deleted users.
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
@@ -187,10 +190,63 @@ var migrations = [][]string{
 		`DROP TABLE authorities`,
 		`ALTER TABLE authorities_v5 RENAME TO authorities`,
 	},
+	{
+		// Users sign in with a password, an OIDC provider, or both.
+		`CREATE TABLE users (
+			id             TEXT PRIMARY KEY,
+			username       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+			display_name   TEXT NOT NULL,
+			email          TEXT NOT NULL,
+			email_verified INTEGER NOT NULL,
+			role           TEXT NOT NULL CHECK (role IN ('', 'site_operator', 'platform_operator', 'admin')),
+			password_hash  TEXT NOT NULL,
+			oidc_issuer    TEXT NOT NULL,
+			oidc_subject   TEXT NOT NULL,
+			managed        INTEGER NOT NULL,
+			disabled       INTEGER NOT NULL,
+			created_at     TEXT NOT NULL,
+			updated_at     TEXT NOT NULL,
+			last_login_at  TEXT NOT NULL
+		) STRICT`,
+		`CREATE UNIQUE INDEX users_oidc ON users (oidc_issuer, oidc_subject) WHERE oidc_subject != ''`,
+		// The sites that site operators manage.
+		`CREATE TABLE user_sites (
+			user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+			site_id TEXT NOT NULL REFERENCES sites (id) ON DELETE CASCADE,
+			PRIMARY KEY (user_id, site_id)
+		) STRICT, WITHOUT ROWID`,
+		`CREATE INDEX user_sites_site ON user_sites (site_id)`,
+		`CREATE TABLE sessions (
+			id         TEXT PRIMARY KEY,
+			user_id    TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+			method     TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			seen_at    TEXT NOT NULL,
+			expires_at TEXT NOT NULL
+		) STRICT`,
+		`CREATE INDEX sessions_user ON sessions (user_id)`,
+		`CREATE TABLE settings (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		) STRICT`,
+	},
 }
 
+// migrate upgrades the schema. Foreign keys are off meanwhile, as SQLite
+// recommends, so that rebuilding a table does not delete the rows referring
+// to it, e.g. the sites of users; they are checked before committing.
 func (s *Store) migrate(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	// The pragma has no effect within transactions.
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA foreign_keys = ON")
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -216,6 +272,13 @@ func (s *Store) migrate(ctx context.Context) error {
 	// PRAGMA statements take no parameters.
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", len(migrations))); err != nil {
 		return err
+	}
+	var violations int
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM pragma_foreign_key_check").Scan(&violations); err != nil {
+		return err
+	}
+	if violations > 0 {
+		return fmt.Errorf("migrating the schema left %d rows referring to missing ones", violations)
 	}
 	return tx.Commit()
 }

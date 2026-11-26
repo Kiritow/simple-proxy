@@ -25,6 +25,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { api, copyText, errorOf, type ApiError } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 import { formatDate } from "@/lib/format"
 import {
   useAuthorityDetails,
@@ -45,6 +46,7 @@ export function CertificateInfoDialog({
   onRenamed: (name: string) => void
 }) {
   const { t, lang } = useI18n()
+  const manage = useAuth().me.permissions.certificates
   const details = useCertificateDetails(name)
   const d = details.data
 
@@ -60,12 +62,14 @@ export function CertificateInfoDialog({
           {d.source === "acme" ? (
             <p className="text-sm text-muted-foreground">{t.info.acmeName}</p>
           ) : (
-            <RenameField
-              name={name}
-              hint={t.info.renameHint}
-              rename={(newName) => api.renameCertificate(name, newName)}
-              onRenamed={onRenamed}
-            />
+            manage && (
+              <RenameField
+                name={name}
+                hint={t.info.renameHint}
+                rename={(newName) => api.renameCertificate(name, newName)}
+                onRenamed={onRenamed}
+              />
+            )
           )}
           {d.problem && (
             <Alert className="border-amber-500/40 bg-amber-500/10 text-amber-900 *:data-[slot=alert-description]:text-amber-900/90 dark:text-amber-200 dark:*:data-[slot=alert-description]:text-amber-200/90">
@@ -186,6 +190,7 @@ export function AuthorityInfoDialog({
   onRenamed: (name: string) => void
 }) {
   const { t, lang } = useI18n()
+  const manage = useAuth().me.permissions.certificates
   const details = useAuthorityDetails(name)
   const d = details.data
 
@@ -198,12 +203,14 @@ export function AuthorityInfoDialog({
     >
       {d && (
         <>
-          <RenameField
-            name={name}
-            hint={t.info.renameCAHint}
-            rename={(newName) => api.renameAuthority(name, newName)}
-            onRenamed={onRenamed}
-          />
+          {manage && (
+            <RenameField
+              name={name}
+              hint={t.info.renameCAHint}
+              rename={(newName) => api.renameAuthority(name, newName)}
+              onRenamed={onRenamed}
+            />
+          )}
           <Details>
             <Row term={t.info.id}>
               <Copyable value={d.id} label={t.info.copyId} />

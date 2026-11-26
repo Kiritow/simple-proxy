@@ -63,6 +63,7 @@ import {
   type CertificateList,
   type Status,
 } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 import { formatDate } from "@/lib/format"
 import type { Resource } from "@/lib/hooks"
 import { describeProblem, useI18n } from "@/lib/i18n"
@@ -87,6 +88,8 @@ export function CertificatesPage({
   onSitesChanged: () => void // by renaming a certificate they use
 }) {
   const { t } = useI18n()
+  // Only administrators change certificates and CAs; others see them.
+  const manage = useAuth().me.permissions.certificates
   const [dialog, setDialog] = useState<(Dialog & { key: number }) | null>(null)
   const open = (d: Dialog) => setDialog({ ...d, key: Date.now() })
   const cas = authorities.data ?? []
@@ -125,43 +128,45 @@ export function CertificatesPage({
         title={t.certs.title}
         description={t.certs.description}
         actions={
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button>
-                <BadgePlus />
-                {t.certs.add}
-                <ChevronDown />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-72">
-              <MenuItem
-                icon={<ShieldCheck />}
-                title={t.certs.request}
-                text={
-                  status?.acme
-                    ? t.certs.requestText
-                    : t.certs.requestUnavailable
-                }
-                disabled={!status?.acme}
-                onSelect={() => open({ kind: "issue" })}
-              />
-              <MenuItem
-                icon={<Upload />}
-                title={t.certs.upload}
-                text={t.certs.uploadText}
-                onSelect={() => open({ kind: "upload" })}
-              />
-              <MenuItem
-                icon={<Stamp />}
-                title={t.certs.sign}
-                text={
-                  cas.length > 0 ? t.certs.signText : t.certs.signUnavailable
-                }
-                disabled={cas.length === 0}
-                onSelect={() => open({ kind: "sign" })}
-              />
-            </DropdownMenuContent>
-          </DropdownMenu>
+          manage && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button>
+                  <BadgePlus />
+                  {t.certs.add}
+                  <ChevronDown />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72">
+                <MenuItem
+                  icon={<ShieldCheck />}
+                  title={t.certs.request}
+                  text={
+                    status?.acme
+                      ? t.certs.requestText
+                      : t.certs.requestUnavailable
+                  }
+                  disabled={!status?.acme}
+                  onSelect={() => open({ kind: "issue" })}
+                />
+                <MenuItem
+                  icon={<Upload />}
+                  title={t.certs.upload}
+                  text={t.certs.uploadText}
+                  onSelect={() => open({ kind: "upload" })}
+                />
+                <MenuItem
+                  icon={<Stamp />}
+                  title={t.certs.sign}
+                  text={
+                    cas.length > 0 ? t.certs.signText : t.certs.signUnavailable
+                  }
+                  disabled={cas.length === 0}
+                  onSelect={() => open({ kind: "sign" })}
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )
         }
       />
 
@@ -264,7 +269,7 @@ export function CertificatesPage({
                     >
                       <Info />
                     </IconButton>
-                    {cert.source === "uploaded" && (
+                    {manage && cert.source === "uploaded" && (
                       <IconButton
                         label={t.certs.replace}
                         onClick={() =>
@@ -274,7 +279,7 @@ export function CertificatesPage({
                         <Upload />
                       </IconButton>
                     )}
-                    {cert.source === "signed" && (
+                    {manage && cert.source === "signed" && (
                       <IconButton
                         label={
                           cas.some((a) => a.name === cert.ca)
@@ -292,7 +297,7 @@ export function CertificatesPage({
                         <RefreshCw />
                       </IconButton>
                     )}
-                    {cert.source !== "acme" && (
+                    {manage && cert.source !== "acme" && (
                       <ConfirmButton
                         title={t.certs.removeTitle(cert.name)}
                         description={t.certs.removeText}
@@ -326,10 +331,12 @@ export function CertificatesPage({
             {t.certs.casDescription}
           </p>
         </div>
-        <Button variant="outline" onClick={() => open({ kind: "authority" })}>
-          <Upload />
-          {t.certs.addCA}
-        </Button>
+        {manage && (
+          <Button variant="outline" onClick={() => open({ kind: "authority" })}>
+            <Upload />
+            {t.certs.addCA}
+          </Button>
+        )}
       </div>
 
       {authorities.data === null ? (
@@ -409,32 +416,38 @@ export function CertificatesPage({
                     >
                       <Info />
                     </IconButton>
-                    <IconButton
-                      label={t.certs.signWith}
-                      onClick={() => open({ kind: "sign", authority: ca.name })}
-                    >
-                      <Stamp />
-                    </IconButton>
+                    {manage && (
+                      <IconButton
+                        label={t.certs.signWith}
+                        onClick={() =>
+                          open({ kind: "sign", authority: ca.name })
+                        }
+                      >
+                        <Stamp />
+                      </IconButton>
+                    )}
                     <IconButton label={t.certs.downloadCA} asChild>
                       <a href={api.authorityCertUrl(ca.name)} download>
                         <Download />
                       </a>
                     </IconButton>
-                    <ConfirmButton
-                      title={t.certs.removeCATitle(ca.name)}
-                      description={t.certs.removeCAText(ca.signed)}
-                      action={t.certs.remove}
-                      onConfirm={() =>
-                        void remove(
-                          api.deleteAuthority(ca.name),
-                          t.certs.removedCA(ca.name)
-                        )
-                      }
-                    >
-                      <IconButton label={t.certs.removeCA}>
-                        <Trash2 />
-                      </IconButton>
-                    </ConfirmButton>
+                    {manage && (
+                      <ConfirmButton
+                        title={t.certs.removeCATitle(ca.name)}
+                        description={t.certs.removeCAText(ca.signed)}
+                        action={t.certs.remove}
+                        onConfirm={() =>
+                          void remove(
+                            api.deleteAuthority(ca.name),
+                            t.certs.removedCA(ca.name)
+                          )
+                        }
+                      >
+                        <IconButton label={t.certs.removeCA}>
+                          <Trash2 />
+                        </IconButton>
+                      </ConfirmButton>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

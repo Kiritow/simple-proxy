@@ -1,7 +1,12 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 
-import { describeProblem, detectLang, languages } from "./index.ts"
+import {
+  describeError,
+  describeProblem,
+  detectLang,
+  languages,
+} from "./index.ts"
 
 test("detectLang picks the first supported preferred language", () => {
   assert.equal(detectLang(["zh-CN", "en-US"]), "zh")
@@ -91,10 +96,66 @@ test("problem codes match those of the server", () => {
     "raw_unclosed_block",
     "raw_unterminated_quote",
     "raw_bad_ref",
+    // Users and signing in, from internal/web.
+    "invalid_username",
+    "username_in_use",
+    "password_too_short",
+    "wrong_password",
+    "invalid_role",
+    "site_not_found",
   ]
   for (const [lang, messages] of Object.entries(languages)) {
     assert.deepEqual(
       Object.keys(messages.problems).sort(),
+      [...codes].sort(),
+      lang
+    )
+  }
+})
+
+test("describeError translates known codes and falls back to the message", () => {
+  const { en, zh } = languages
+  const error = {
+    status: 401,
+    message: "wrong username or password",
+    code: "invalid_credentials",
+    fields: [],
+  }
+  assert.equal(describeError(en, error), "Wrong username or password.")
+  assert.equal(describeError(zh, error), "用户名或密码错误。")
+  assert.equal(
+    describeError(zh, { ...error, code: "new_code" }),
+    "wrong username or password"
+  )
+  assert.equal(describeError(zh, { ...error, code: undefined }), error.message)
+  assert.equal(
+    describeError(zh, { ...error, code: "constructor" }),
+    error.message
+  )
+})
+
+test("error codes match those of the server", () => {
+  // The codes of errors with requests as a whole, from internal/web.
+  const codes = [
+    "invalid_credentials",
+    "account_disabled",
+    "password_login_disabled",
+    "too_many_attempts",
+    "registration_closed",
+    "password_managed",
+    "not_password_account",
+    "managed_user",
+    "own_account",
+    "last_admin",
+    "unauthenticated",
+    "forbidden",
+    "directives_restricted",
+    "oidc_failed",
+    "oidc_unavailable",
+  ]
+  for (const [lang, messages] of Object.entries(languages)) {
+    assert.deepEqual(
+      Object.keys(messages.auth.errors).sort(),
       [...codes].sort(),
       lang
     )

@@ -443,7 +443,7 @@ func TestPreview(t *testing.T) {
 	}
 	before := e.nginxConf(t)
 
-	p, err := e.m.Preview(ctx, a.ID, site("a.example.com", 4000))
+	p, err := e.m.Preview(ctx, a.ID, site("a.example.com", 4000), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +460,7 @@ func TestPreview(t *testing.T) {
 	}
 
 	// A new site.
-	p, err = e.m.Preview(ctx, "", site("b.example.com", 5000))
+	p, err = e.m.Preview(ctx, "", site("b.example.com", 5000), nil)
 	if err != nil || p.Generation != 0 || !strings.Contains(string(p.Proposed), "server_name b.example.com;") || strings.Contains(string(p.Current), "b.example.com") {
 		t.Errorf("new site preview = %+v, %v", p, err)
 	}
@@ -471,25 +471,54 @@ func TestPreview(t *testing.T) {
 
 	// Disabled sites are not in the configuration, but the preview shows
 	// what they would add once enabled, if it can be generated.
-	p, err = e.m.Preview(ctx, "", json.RawMessage(`{"server_name": "c.example.com", "enable": false, "default": {"port": 6000}}`))
+	p, err = e.m.Preview(ctx, "", json.RawMessage(`{"server_name": "c.example.com", "enable": false, "default": {"port": 6000}}`), nil)
 	if err != nil || strings.Contains(string(p.Proposed), "c.example.com") || !strings.Contains(p.Site, "proxy_pass http://127.0.0.1:6000;") {
 		t.Errorf("disabled site preview = %+v, %v", p, err)
 	}
-	p, err = e.m.Preview(ctx, "", json.RawMessage(`{"server_name": "c.example.com", "enable": false, "cert_name": "nope", "default": {"port": 6000}}`))
+	p, err = e.m.Preview(ctx, "", json.RawMessage(`{"server_name": "c.example.com", "enable": false, "cert_name": "nope", "default": {"port": 6000}}`), nil)
 	if err != nil || p.Site != "" {
 		t.Errorf("disabled site with a missing certificate: Site = %q, %v", p.Site, err)
 	}
 
 	// Problems are found like when saving, domain conflicts included.
-	if _, err := e.m.Preview(ctx, "", site("A.example.com", 1)); len(fields(err)) != 1 || !strings.Contains(fields(err)[0], "is used by another site") {
+	if _, err := e.m.Preview(ctx, "", site("A.example.com", 1), nil); len(fields(err)) != 1 || !strings.Contains(fields(err)[0], "is used by another site") {
 		t.Errorf("conflicting preview error = %v", err)
 	}
-	if _, err := e.m.Preview(ctx, "missing", site("x.example.com", 1)); !errors.Is(err, manager.ErrNotFound) {
+	if _, err := e.m.Preview(ctx, "missing", site("x.example.com", 1), nil); !errors.Is(err, manager.ErrNotFound) {
 		t.Errorf("preview of a missing site: %v, want ErrNotFound", err)
 	}
 
 	// Nothing was changed.
 	if e.nginxConf(t) != before || len(e.stored(t)) != 1 {
 		t.Error("Preview changed something")
+	}
+}
+
+// Users who may only see some sites get previews of those alone, while the
+// site is still checked against all sites.
+func TestPreviewVisible(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	a, err := e.m.CreateSite(ctx, site("a.example.com", 3000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.m.CreateSite(ctx, site("hidden.example.com", 3001)); err != nil {
+		t.Fatal(err)
+	}
+	none := func(string) bool { return false }
+	p, err := e.m.Preview(ctx, a.ID, site("a.example.com", 4000), none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur, prop := string(p.Current), string(p.Proposed)
+	if !strings.Contains(cur, "127.0.0.1:3000") || !strings.Contains(prop, "127.0.0.1:4000") {
+		t.Errorf("the preview lacks the site itself:\n%s\n---\n%s", cur, prop)
+	}
+	if strings.Contains(cur+prop, "hidden.example.com") {
+		t.Errorf("the preview shows a site that is not visible:\n%s\n---\n%s", cur, prop)
+	}
+	if _, err := e.m.Preview(ctx, a.ID, site("hidden.example.com", 1), none); len(fields(err)) != 1 {
+		t.Errorf("conflict with a site that is not visible: %v, want one problem", err)
 	}
 }

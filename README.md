@@ -29,13 +29,18 @@ forward them to), and saving applies it to nginx right away.
   and overwrite it; saving never overwrites someone else's change unknowingly.
 - **Import/export:** `config.yaml` files of legacy-proxy-generator can be
   imported, and the sites exported in the same format.
+- **Users and roles:** sign in with a username and password, or with an
+  OpenID Connect provider. Site operators manage the sites given to them,
+  platform operators all sites, and administrators everything, certificates
+  and users included. The super administrators are listed in a
+  configuration file; see [Users and roles](#users-and-roles).
 - English and Chinese, following the browser's language.
 
-Sites, uploaded certificates and CAs are stored in an SQLite database,
-`sites.db`, in the directory of the executable. It holds private keys, so
-only its owner can read it. The console has no login, so it listens on
-127.0.0.1 by default; reach it through an SSH tunnel or a VPN. Anyone who can
-reach it can sign certificates with your CAs.
+Sites, uploaded certificates, CAs and users are stored in an SQLite
+database, `sites.db`, in the directory of the executable. It holds private
+keys, so only its owner can read it. The console listens on 127.0.0.1 by
+default; reach it through an SSH tunnel or a VPN, or put it behind a reverse
+proxy with HTTPS before opening it to others.
 
 ## Run
 
@@ -54,7 +59,8 @@ dist: no matching files found`.
 | Flag             | Default                 | Description |
 | ---------------- | ----------------------- | ----------- |
 | `-addr`          | `127.0.0.1:8080`        | Address to serve the console on. |
-| `-db`            | `sites.db` next to the executable | SQLite database storing the sites, certificates and CAs. Set it when using `go run`, whose executable is temporary. |
+| `-db`            | `sites.db` next to the executable | SQLite database storing the sites, certificates, CAs and users. Set it when using `go run`, whose executable is temporary. |
+| `-config`        | `simple-proxy.yaml` next to `-db`, if it exists | The [configuration file](#users-and-roles): super administrators and how users sign in. |
 | `-cert-dir`      | `certs` next to `-db`   | Directory where uploaded and signed certificates are written for nginx to read. |
 | `-nginx-conf`    | none                    | The configuration file to manage, which nginx must include in its `http` block. Without it, sites are only stored. |
 | `-nginx-test`    | `nginx -t`              | Command testing nginx's configuration. |
@@ -67,6 +73,101 @@ dist: no matching files found`.
 
 Commands are split at spaces and run without a shell; use a script for
 anything more complex.
+
+### Users and roles
+
+Everyone signs in to the console. What they may do depends on their role:
+
+| Role              | May |
+| ----------------- | --- |
+| (none)            | Sign in, and nothing else. New accounts start without a role. |
+| Site operator     | See and change the sites an administrator gives them, and turn them on and off, but not their raw configuration or extra directives (see below). Their previews show only their sites. |
+| Platform operator | Manage all sites: add, change, delete, import and export them, apply them to nginx again, and see the whole nginx configuration. |
+| Administrator     | Everything: also request, upload, sign, rename and delete certificates and CAs, manage users, and open or close signing up. |
+
+Everyone with a role sees the certificates and CAs, to choose one for a site.
+Administrators manage users on the Users page: they add accounts with a
+password, give roles and sites, disable accounts (which signs them out) and
+set new passwords. Roles take effect right away, also in open sessions.
+Deleting a site takes it from its site operators, and so does importing
+sites, which replaces all of them.
+Nobody can change their own role, or disable or delete themselves, and an
+enabled administrator always remains.
+
+**The configuration file,** `simple-proxy.yaml` next to `-db` (or `-config`),
+lists the super administrators, and sets up signing in. See
+[simple-proxy.yaml.example](simple-proxy.yaml.example):
+
+```yaml
+admins:
+- username: admin              # an account signing in with a password
+  password: change-me-please   # or a hash from `simple-proxy hash-password`
+- email: ops@example.com       # an account of the OIDC provider, by verified email (or subject:)
+password_login: true           # the default
+oidc:
+  issuer: https://id.example.com/realms/main
+  client_id: simple-proxy
+  client_secret: "..."
+  redirect_url: https://proxy.example.com/api/auth/oidc/callback
+```
+
+On every start, the super administrators are made administrators, and
+accounts with a username are created if needed; the console cannot change
+their role, disable or delete them, and only they change their own email and
+password. With `password`, that is the account's password, which the console
+cannot change. Without it, an account that is not a super administrator yet
+gets a random password, which is logged once (`docker logs`), to be changed
+in the console, and its sessions end: whoever signed up with that username
+may not be who the file means. Usernames are for accounts signing in with a
+password; list accounts of the OIDC provider by `email` or `subject`.
+Super administrators removed from the file lose their role on the next
+start, and those listed by email when the provider reports another one. Without any super administrator or administrator, simple-proxy
+creates `admin` with a random password, and logs it. To get back in after
+losing a password, set one in the file and restart.
+
+```bash
+simple-proxy hash-password     # asks for a password, prints its hash for the file
+```
+
+**Signing up** is open by default: anyone who can reach the console can
+create an account with a password, which has no role until an administrator
+gives it one. Accounts of the OIDC provider are created when they first sign
+in. Administrators close signing up with the switch on the Users page; then
+only existing accounts and super administrators can sign in.
+
+**OpenID Connect:** register simple-proxy at the provider (Keycloak,
+Authentik, Google, Microsoft Entra ID, ...) as a client using the
+authorization code flow, with `redirect_url` as its redirect URI: the
+console's address followed by `api/auth/oidc/callback`. The sign-in page then
+offers "Sign in with" the provider's `name` (default: the issuer's host).
+simple-proxy uses PKCE and checks the ID token's signature, issuer, audience,
+expiry and nonce. Accounts are identified by the provider's subject; their
+display name and email are updated at each sign-in, and their username is
+taken from `preferred_username` or `email` once. Set `password_login: false`
+to sign in with the provider only.
+
+Sessions last 7 days without use, and 30 days at most; changing a password
+ends the other sessions, and removing or changing the OIDC provider ends
+those signed in with it. Failed attempts to sign in are limited to 10 per 15
+minutes for each client address and username, and 100 for each address;
+attempts to sign up to 20 per hour for each address. Behind a reverse proxy,
+all clients share its address, so list it in `trusted_proxies` for its
+`X-Forwarded-For` header to tell theirs:
+
+```yaml
+trusted_proxies: [127.0.0.1, 10.0.0.0/8]
+```
+
+Requests changing anything must come from the console itself, so other
+websites cannot make them in your name. Over HTTPS, the cookies are named
+`__Host-...`, so that other hosts of the domain cannot set them.
+
+Site operators cannot change the raw configuration or the extra directives
+of their sites, which platform operators and administrators set for them:
+nginx runs those with its privileges, so they could listen on other
+addresses, use any certificate or write files, beyond their sites. Platform
+operators can, so give that role to people trusted with nginx's
+configuration.
 
 ### How changes are applied
 
@@ -141,8 +242,11 @@ docker run -d --name simple-proxy --restart unless-stopped \
   simple-proxy
 ```
 
-The console has no login: publish port 81 on 127.0.0.1 only, as above, and
-reach it through an SSH tunnel or a VPN.
+Put the [configuration file](#users-and-roles) at `simple-proxy.yaml` in the
+volume, e.g. `docker cp simple-proxy.yaml simple-proxy:/data/`; without one,
+the console logs the password of a new `admin` account on first start. Publish
+port 81 on 127.0.0.1 only, as above, and reach it through an SSH tunnel or a
+VPN, or a reverse proxy with HTTPS.
 
 - **Upstreams** are reached from inside the container, where `127.0.0.1` is
   the container itself. For services on the host, add
@@ -152,7 +256,7 @@ reach it through an SSH tunnel or a VPN.
   `-addr 127.0.0.1:81`.
 - **Flags** given after the image name are passed to simple-proxy and
   override the image's defaults, e.g. `-addr`; any other command runs instead
-  of the services, e.g. `bash`.
+  of the services, e.g. `bash`, or `simple-proxy hash-password`.
 - **acme.sh** requests certificates from Let's Encrypt; set `ACME_SERVER`
   to use another CA, such as `zerossl`. Pass the credentials of a DNS API as
   environment variables, e.g. `-e CF_Token=...`; acme.sh keeps them in
@@ -261,8 +365,26 @@ then not be set elsewhere in nginx's configuration.
 The console is built on this API, which scripts can use as well. A site's
 `config` is one entry of `servers` above, in JSON.
 
+Requests need a signed-in user: the browser's session cookie, or for
+scripts, a username and password with HTTP Basic auth (`curl -u`). Otherwise
+they fail with `401`, and with `403` if the user's role does not allow them
+(see [Users and roles](#users-and-roles)). Site operators only get, change and
+preview their own sites.
+
 | Request                   | Response |
 | ------------------------- | -------- |
+| `GET /api/auth/config`    | How to sign in: `{"password": true, "registration": true, "oidc": {"name": "..."}}`; needs no sign-in. |
+| `POST /api/auth/login`    | Sign in: `{"username": "...", "password": "..."}` gives `{"user": {...}, "permissions": {...}}` and the session cookie. |
+| `POST /api/auth/register` | Sign up, if open: `{"username": "...", "password": "...", "display_name": "..."}`. |
+| `POST /api/auth/logout`   | Sign out. |
+| `GET /api/auth/me`        | The signed-in user, and what they may do: `{"user": {...}, "permissions": {"sites": true, "all_sites": false, "certificates": false, "users": false}}`. |
+| `POST /api/auth/password` | Change your password: `{"current": "...", "password": "..."}`. |
+| `GET /api/auth/oidc/login` | Sign in with the OIDC provider, which sends the browser back to `/api/auth/oidc/callback`. |
+| `GET /api/users`          | Administrators: the users, `{"users": [{"id": "...", "username": "...", "role": "site_operator", "sites": ["..."], "method": "password", "managed": false, ...}]}`. |
+| `POST /api/users`         | Add one, signing in with a password: `{"username": "...", "password": "...", "role": "...", "sites": [...]}`. |
+| `PATCH /api/users/{id}`   | Change one: any of `display_name`, `email`, `role`, `sites`, `disabled` and `password`. |
+| `DELETE /api/users/{id}`  | Delete one. |
+| `GET /api/settings`, `PUT` | Administrators: `{"registration": true}`, whether new accounts may sign up. |
 | `GET /api/sites`          | `{"sites": [{"id": "...", "config": {...}, "generation": 1}]}` |
 | `POST /api/sites`         | Add a site: `{"config": {...}}`. |
 | `PUT /api/sites/{id}`     | Change a site: `{"config": {...}, "generation": 1}`. |
@@ -294,20 +416,21 @@ Changes and deletions carry the generation of the site they are based on,
 and fail with `409` if the site has changed since; without a generation they
 always apply. Changes respond `400` for invalid sites, `422` for missing
 certificates, and `502` with nginx's output if nginx rejects the
-configuration. Private keys are never returned. Errors are JSON:
+configuration. Private keys are never returned. Errors are JSON, with a
+`code` for refusals such as `unauthenticated`, `forbidden` or `last_admin`:
 
 ```json
-{"message": "...", "output": "nginx: [emerg] ...",
+{"message": "...", "code": "...", "output": "nginx: [emerg] ...",
  "fields": [{"field": "servers[0].default.port", "message": "70000 is not a valid port", "code": "invalid_port", "value": "70000"}]}
 ```
 
-The `code` (see `config.ProblemCode` and `certs.ProblemCode`, plus
-`cert_not_found`) lets clients
+The `code` of fields (see `config.ProblemCode`, `certs.ProblemCode` and
+`auth.ProblemCode`, plus `cert_not_found`) lets clients
 describe a problem in their own words, as the UI does in Chinese. `generate`
 and `validate` answer in plain text unless asked for JSON:
 
 ```bash
-curl --data-binary @config.yaml http://127.0.0.1:8080/api/generate > proxy.conf
+curl -u admin --data-binary @config.yaml http://127.0.0.1:8080/api/generate > proxy.conf
 ```
 
 ## Development
@@ -319,7 +442,8 @@ internal/nginx     configuration generator (nginx.conf.tmpl)
 internal/apply     writes, tests and reloads nginx's configuration
 internal/acme      certificates through acme.sh
 internal/certs     uploaded certificates and CAs: parsing, signing, files
-internal/store     SQLite storage of sites, certificates and CAs (modernc.org/sqlite, no cgo)
+internal/store     SQLite storage of sites, certificates, CAs, users and sessions (modernc.org/sqlite, no cgo)
+internal/auth      users: passwords, OIDC, sessions, roles, and the configuration file
 internal/manager   site and certificate changes: check, apply, then store
 internal/web       HTTP API, embeds the UI from internal/web/dist
 web/               UI: React, Tailwind CSS and shadcn/ui

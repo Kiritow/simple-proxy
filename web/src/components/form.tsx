@@ -110,27 +110,35 @@ export function ToggleCard({
   description,
   checked,
   onCheckedChange,
+  disabled,
 }: {
   id: string
   title: ReactNode
   description: ReactNode
   checked: boolean
   onCheckedChange: (checked: boolean) => void
+  disabled?: boolean
 }) {
   return (
     <FieldLabel htmlFor={id}>
-      <Field orientation="horizontal">
+      <Field orientation="horizontal" data-disabled={disabled || undefined}>
         <FieldContent>
           <FieldTitle>{title}</FieldTitle>
           <FieldDescription>{description}</FieldDescription>
         </FieldContent>
-        <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
+        <Switch
+          id={id}
+          checked={checked}
+          onCheckedChange={onCheckedChange}
+          disabled={disabled}
+        />
       </Field>
     </FieldLabel>
   )
 }
 
-// DirectiveList edits the raw nginx directives of a server or location.
+// DirectiveList edits the raw nginx directives of a server or location, or
+// shows them if readOnly, e.g. to site operators, who may not change them.
 export function DirectiveList({
   owner,
   title,
@@ -139,6 +147,7 @@ export function DirectiveList({
   onChange,
   problems,
   placeholder,
+  readOnly,
 }: {
   owner: string // key of the site or route
   title: ReactNode
@@ -147,6 +156,7 @@ export function DirectiveList({
   onChange: (items: Directive[]) => void
   problems: Problems
   placeholder: string
+  readOnly?: boolean
 }) {
   const { t } = useI18n()
   const describe = useDescribe()
@@ -162,7 +172,12 @@ export function DirectiveList({
       <FieldLegend variant="label" className="mb-0">
         {title}
       </FieldLegend>
-      <FieldDescription>{description}</FieldDescription>
+      <FieldDescription>
+        {readOnly ? t.site.directivesRestricted : description}
+      </FieldDescription>
+      {readOnly && items.length === 0 && (
+        <p className="text-sm text-muted-foreground">{t.site.noDirectives}</p>
+      )}
       {items.map((d) => {
         const key = directiveKey(owner, d)
         const error = describe(problems.byKey.get(key))
@@ -186,22 +201,27 @@ export function DirectiveList({
                 autoComplete="off"
                 spellCheck={false}
                 className="font-mono"
+                readOnly={readOnly}
               />
-              <IconButton
-                label={t.site.removeDirective}
-                onClick={() => onChange(items.filter((it) => it.id !== d.id))}
-              >
-                <X />
-              </IconButton>
+              {!readOnly && (
+                <IconButton
+                  label={t.site.removeDirective}
+                  onClick={() => onChange(items.filter((it) => it.id !== d.id))}
+                >
+                  <X />
+                </IconButton>
+              )}
             </div>
             <FieldError>{error}</FieldError>
           </Field>
         )
       })}
-      <Button variant="outline" size="sm" className="w-fit" onClick={add}>
-        <Plus />
-        {t.site.addDirective}
-      </Button>
+      {!readOnly && (
+        <Button variant="outline" size="sm" className="w-fit" onClick={add}>
+          <Plus />
+          {t.site.addDirective}
+        </Button>
+      )}
     </FieldSet>
   )
 }

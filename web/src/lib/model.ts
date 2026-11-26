@@ -385,6 +385,24 @@ export function fromStored(stored: Stored): Site {
   return { ...site, id: stored.id }
 }
 
+// siteNames returns the names of stored sites by ID, as lists show them:
+// their first domain, or raw or unnamed for sites without one.
+export function siteNames(
+  sites: Stored[],
+  raw: string,
+  unnamed: string
+): Map<string, string> {
+  return new Map(
+    sites.map((stored) => {
+      const site = fromStored(stored)
+      return [
+        stored.id,
+        domainsOf(site)[0] ?? (site.raw !== null ? raw : unnamed),
+      ]
+    })
+  )
+}
+
 // sitesFromConfig converts a parsed configuration into sites. Like the
 // server, it rejects unknown fields; other problems are left for the server
 // to report once the sites are in the builder.

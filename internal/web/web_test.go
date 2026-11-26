@@ -16,6 +16,7 @@ import (
 
 	"github.com/kiritow/simple-proxy/internal/acme"
 	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/auth"
 	"github.com/kiritow/simple-proxy/internal/buildinfo"
 	"github.com/kiritow/simple-proxy/internal/certs"
 	"github.com/kiritow/simple-proxy/internal/certs/certstest"
@@ -53,9 +54,28 @@ type options struct {
 	applies bool // with a fake nginx rejecting "reject_me"
 	ca      bool
 	webroot bool
+	auth    auth.Config // besides the super administrator admin
 }
 
+// The password of admin, the super administrator of every handler.
+const adminPassword = "admin-password"
+
+// newHandler returns a handler whose requests are made by admin, unless
+// they have a session cookie or a password of their own.
 func newHandler(t *testing.T, o options) http.Handler {
+	t.Helper()
+	h := newServer(t, o)
+	cookie := signIn(t, h, "admin", adminPassword)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := r.BasicAuth(); !ok && len(r.Cookies()) == 0 {
+			r.AddCookie(cookie)
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// newServer returns a handler that nobody is signed in to.
+func newServer(t *testing.T, o options) http.Handler {
 	t.Helper()
 	dir := t.TempDir()
 	s, err := store.Open(t.Context(), filepath.Join(dir, "sites.db"))
@@ -82,12 +102,36 @@ func newHandler(t *testing.T, o options) http.Handler {
 			Test: []string{"sh", "-c", `if grep -q reject_me "$0"; then echo "nginx: [emerg] unknown directive" >&2; exit 1; fi`, conf},
 		}
 	}
+	o.auth.Admins = append(o.auth.Admins, auth.AdminConfig{Username: "admin", Password: adminPassword})
+	users, err := auth.New(t.Context(), auth.Options{Store: s, Config: o.auth})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return web.NewHandler(web.Options{
+		Auth:    users,
 		Manager: manager.New(opts),
 		Example: []byte(example),
 		Logger:  slog.New(slog.DiscardHandler),
 		Build:   buildinfo.Info{Commit: "0123abcd", Modified: true},
 	})
+}
+
+// signIn signs in with a password, and returns the session cookie.
+func signIn(t *testing.T, h http.Handler, username, password string) *http.Cookie {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/api/auth/login", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("signing in as %s: %d %s", username, rec.Code, rec.Body)
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "simple_proxy_session" && c.Value != "" {
+			return c
+		}
+	}
+	t.Fatalf("signing in as %s set no session cookie", username)
+	return nil
 }
 
 type step struct {

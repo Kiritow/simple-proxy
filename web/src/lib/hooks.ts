@@ -11,8 +11,10 @@ import {
   type CertificatePreview,
   type FieldProblem,
   type Preview,
+  type Settings,
   type Status,
   type StoredSite,
+  type User,
 } from "@/lib/api"
 import { resolveField, serialize, type Site } from "@/lib/model"
 
@@ -66,6 +68,10 @@ export const useCertificates = (): Resource<CertificateList> =>
 
 export const useAuthorities = (): Resource<Authority[]> =>
   useResource(api.authorities)
+
+export const useUsers = (): Resource<User[]> => useResource(api.users)
+
+export const useSettings = (): Resource<Settings> => useResource(api.settings)
 
 // useCertificateDetails loads the details of the certificate of the given
 // name, again when the name changes.

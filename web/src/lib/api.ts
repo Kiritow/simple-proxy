@@ -12,6 +12,9 @@ export type FieldProblem = {
 export type ApiError = {
   status: number // 0 if the server could not be reached
   message: string
+  // code identifies the problem with the request as a whole, such as
+  // "invalid_credentials", for clients to describe it in their own words.
+  code?: string
   fields: FieldProblem[]
   output?: string // of nginx or acme.sh
 }
@@ -182,6 +185,88 @@ export type SignRequest = {
   replace: boolean
 }
 
+// Role is what an account may do: "" for nothing (new accounts), sites
+// given to a site operator, all sites for a platform operator, and
+// everything for an administrator.
+export type Role = "" | "site_operator" | "platform_operator" | "admin"
+
+export const roles: readonly Role[] = [
+  "",
+  "site_operator",
+  "platform_operator",
+  "admin",
+]
+
+// SignInMethod is how an account signs in.
+export type SignInMethod = "password" | "oidc"
+
+export type User = {
+  id: string
+  username: string
+  display_name: string // may be empty
+  email: string // may be empty
+  role: Role
+  sites: string[] // IDs of the sites of a site operator
+  disabled: boolean // cannot sign in
+  method: SignInMethod
+  // managed is set for the super administrators of the config file, whose
+  // role cannot be changed here, and who cannot be disabled or deleted.
+  managed: boolean
+  password_managed: boolean // the password is set in the config file
+  created_at: string
+  last_login_at?: string // absent if never
+}
+
+// Permissions are what the signed-in account may do, following its role.
+export type Permissions = {
+  sites: boolean // see and edit sites: its own, or all of them
+  all_sites: boolean // add, delete and import sites, apply, nginx config
+  certificates: boolean // change certificates and CAs
+  users: boolean // manage users and settings
+}
+
+export type Me = { user: User; permissions: Permissions }
+
+// AuthConfig tells how to sign in.
+export type AuthConfig = {
+  password: boolean // with a username and a password
+  registration: boolean // new accounts may sign up
+  oidc: { name: string } | null // with the OpenID Connect provider named
+}
+
+export type Settings = { registration: boolean }
+
+// NewUser is a password account to add.
+export type NewUser = {
+  username: string
+  display_name: string
+  email: string
+  password: string
+  role: Role
+  sites: string[]
+}
+
+// UserChange changes the fields given of an account.
+export type UserChange = Partial<
+  Pick<User, "display_name" | "email" | "role" | "sites" | "disabled">
+> & { password?: string }
+
+// Requests failing with 401 mean that the session ended, except for these,
+// which find out whether there is one, or start one.
+const signingIn = ["api/auth/me", "api/auth/login", "api/auth/register"]
+
+const unauthorizedListeners = new Set<() => void>()
+
+// onUnauthorized calls listener whenever a request fails because the
+// session ended, e.g. after signing out elsewhere. It returns a function
+// that stops calling it.
+export function onUnauthorized(listener: () => void): () => void {
+  unauthorizedListeners.add(listener)
+  return () => {
+    unauthorizedListeners.delete(listener)
+  }
+}
+
 async function request<T>(
   path: string,
   init: RequestInit & { json?: unknown } = {}
@@ -200,7 +285,13 @@ async function request<T>(
   } catch (err) {
     throw new RequestError({ status: 0, message: String(err), fields: [] })
   }
-  if (!res.ok) throw new RequestError(await readError(res))
+  if (!res.ok) {
+    const error = await readError(res)
+    if (res.status === 401 && !signingIn.includes(path)) {
+      for (const listener of unauthorizedListeners) listener()
+    }
+    throw new RequestError(error)
+  }
   if (res.status === 204) return undefined as T
   const type = res.headers.get("Content-Type") ?? ""
   return (type.includes("json") ? res.json() : res.text()) as Promise<T>
@@ -213,6 +304,7 @@ async function readError(res: Response): Promise<ApiError> {
     return {
       status: res.status,
       message: body.message ?? text,
+      code: body.code,
       fields: body.fields ?? [],
       output: body.output,
     }
@@ -333,6 +425,46 @@ export const api = {
     }),
   authorityCertUrl: (name: string) =>
     `api/authorities/${encodeURIComponent(name)}/cert.pem`,
+
+  authConfig: () => request<AuthConfig>("api/auth/config"),
+  // me fails with 401 if not signed in.
+  me: () => request<Me>("api/auth/me"),
+  login: (username: string, password: string) =>
+    request<Me>("api/auth/login", {
+      method: "POST",
+      json: { username, password },
+    }),
+  // register signs up a new account, without a role, and signs it in.
+  register: (username: string, password: string, displayName: string) =>
+    request<Me>("api/auth/register", {
+      method: "POST",
+      json: { username, password, display_name: displayName },
+    }),
+  logout: () => request<void>("api/auth/logout", { method: "POST" }),
+  // changePassword changes the password of the signed-in account, and signs
+  // out its other sessions.
+  changePassword: (current: string, password: string) =>
+    request<void>("api/auth/password", {
+      method: "POST",
+      json: { current, password },
+    }),
+  // oidcLoginUrl starts signing in with the OpenID Connect provider, which
+  // returns to the console afterwards.
+  oidcLoginUrl: "api/auth/oidc/login",
+
+  users: () => request<{ users: User[] }>("api/users").then((r) => r.users),
+  createUser: (user: NewUser) =>
+    request<User>("api/users", { method: "POST", json: user }),
+  updateUser: (id: string, change: UserChange) =>
+    request<User>(`api/users/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      json: change,
+    }),
+  deleteUser: (id: string) =>
+    request<void>(`api/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  settings: () => request<Settings>("api/settings"),
+  updateSettings: (settings: Settings) =>
+    request<Settings>("api/settings", { method: "PUT", json: settings }),
 
   validate: (config: ConfigJSON, signal?: AbortSignal) =>
     request<void>("api/validate", { method: "POST", json: config, signal }),
