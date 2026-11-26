@@ -15,7 +15,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -24,7 +23,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/kiritow/simple-proxy/internal/config"
 )
@@ -43,7 +41,6 @@ const (
 	NotCA              ProblemCode = "not_ca"
 	Expired            ProblemCode = "expired"
 	InvalidCertName    ProblemCode = "invalid_cert_name"
-	InvalidCAName      ProblemCode = "invalid_ca_name"
 	NameInUse          ProblemCode = "name_in_use"
 	CANotFound         ProblemCode = "ca_not_found"
 	NoDomains          ProblemCode = "no_domains"
@@ -63,9 +60,8 @@ var problemText = map[ProblemCode]string{
 	KeyMismatch:        "does not belong to the certificate",
 	NotCA:              "is not a CA certificate",
 	Expired:            "expired on %s",
-	InvalidCertName:    "%q is not a valid certificate name",
-	InvalidCAName:      "%q is not a valid CA name",
-	NameInUse:          "%q is already used by another certificate",
+	InvalidCertName:    "%q is not a valid name: it must fit on one line, with at most 128 characters",
+	NameInUse:          "the name %q is taken",
 	CANotFound:         "there is no CA named %q",
 	NoDomains:          "at least one domain is required",
 	InvalidDomain:      "%q is not a domain name or IP address",
@@ -126,15 +122,24 @@ func (p *Pair) KeyPEM() []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 }
 
-// Parse reads a certificate chain and its private key from PEM, as pasted or
-// uploaded. The certificates and the key may be in either text, in any
-// order: the chain starts with the certificate whose public key matches the
-// key, followed by its issuer, that one's issuer and so on, as far as they
-// are given. Other certificates are dropped. Problems are reported for the
-// field "cert" or "key".
-func Parse(certPEM, keyPEM []byte) (*Pair, error) {
+// Read reads a certificate chain and its private key from PEM, as pasted or
+// uploaded, as far as it can. The certificates and the key may be in either
+// text, in any order: the chain starts with the certificate whose public key
+// matches the key, or else with one that issued none of the others, followed
+// by its issuer, that one's issuer and so on, as far as they are given.
+// Other certificates are dropped.
+//
+// The chain is empty if no certificate could be read, and the key nil unless
+// it belongs to the first certificate. All problems found are reported, as
+// config.FieldErrors for the fields "cert" and "key", e.g. for previews.
+func Read(certPEM, keyPEM []byte) (*Pair, error) {
+	var errs config.FieldErrors
+	add := func(field string, code ProblemCode, value string) {
+		errs = append(errs, &config.FieldError{Field: field, Err: &Problem{Code: code, Value: value}})
+	}
 	var certs []*x509.Certificate
 	var keys []crypto.Signer
+	badCert, badKey := false, false
 	for _, text := range [][]byte{certPEM, keyPEM} {
 		for rest := text; ; {
 			var block *pem.Block
@@ -146,36 +151,52 @@ func Parse(certPEM, keyPEM []byte) (*Pair, error) {
 			case block.Type == "CERTIFICATE":
 				c, err := x509.ParseCertificate(block.Bytes)
 				if err != nil {
-					return nil, FieldError("cert", InvalidCertificate, err.Error())
-				}
-				if !slices.ContainsFunc(certs, c.Equal) {
+					add("cert", InvalidCertificate, err.Error())
+					badCert = true
+				} else if !slices.ContainsFunc(certs, c.Equal) {
 					certs = append(certs, c)
 				}
 			case block.Type == "ENCRYPTED PRIVATE KEY", block.Headers["Proc-Type"] == "4,ENCRYPTED":
-				return nil, FieldError("key", EncryptedKey, "")
+				add("key", EncryptedKey, "")
+				badKey = true
 			case strings.HasSuffix(block.Type, "PRIVATE KEY"):
 				key, err := parseKey(block)
 				if err != nil {
-					return nil, FieldError("key", InvalidKey, err.Error())
+					add("key", InvalidKey, err.Error())
+					badKey = true
+				} else {
+					keys = append(keys, key)
 				}
-				keys = append(keys, key)
 			}
 		}
 	}
-	switch {
-	case len(certs) == 0:
-		return nil, FieldError("cert", NoCertificate, "")
-	case len(keys) == 0:
-		return nil, FieldError("key", NoKey, "")
+	if len(certs) == 0 && !badCert {
+		add("cert", NoCertificate, "")
 	}
-	key := keys[0]
-	i := slices.IndexFunc(certs, func(c *x509.Certificate) bool { return matches(c, key) })
-	if i < 0 {
-		return nil, FieldError("key", KeyMismatch, "")
+	if len(keys) == 0 && !badKey {
+		add("key", NoKey, "")
 	}
-	chain := []*x509.Certificate{certs[i]}
-	for rest := slices.Delete(slices.Clone(certs), i, i+1); ; {
-		last := chain[len(chain)-1]
+	p := &Pair{}
+	if len(certs) == 0 {
+		return p, orNil(errs)
+	}
+
+	first := -1
+	for _, key := range keys {
+		if i := slices.IndexFunc(certs, func(c *x509.Certificate) bool { return matches(c, key) }); i >= 0 {
+			first, p.Key = i, key
+			break
+		}
+	}
+	if first < 0 {
+		if len(keys) > 0 {
+			add("key", KeyMismatch, "")
+		}
+		first = endEntity(certs)
+	}
+	p.Chain = []*x509.Certificate{certs[first]}
+	for rest := slices.Delete(slices.Clone(certs), first, first+1); ; {
+		last := p.Chain[len(p.Chain)-1]
 		if selfSigned(last) {
 			break
 		}
@@ -183,10 +204,37 @@ func Parse(certPEM, keyPEM []byte) (*Pair, error) {
 		if j < 0 {
 			break
 		}
-		chain = append(chain, rest[j])
+		p.Chain = append(p.Chain, rest[j])
 		rest = slices.Delete(rest, j, j+1)
 	}
-	return &Pair{Chain: chain, Key: key}, nil
+	return p, orNil(errs)
+}
+
+// Parse is Read, failing on any problem.
+func Parse(certPEM, keyPEM []byte) (*Pair, error) {
+	p, err := Read(certPEM, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// endEntity returns the index of the first certificate that issued none of
+// the others.
+func endEntity(certs []*x509.Certificate) int {
+	for i, c := range certs {
+		if !slices.ContainsFunc(certs, func(o *x509.Certificate) bool { return o != c && issued(c, o) }) {
+			return i
+		}
+	}
+	return 0
+}
+
+func orNil(errs config.FieldErrors) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs
 }
 
 // issued reports whether ca issued c.
@@ -241,12 +289,23 @@ func CheckCertificate(p *Pair, now time.Time) error {
 
 // CheckCA checks a CA certificate, which is to sign certificates.
 func CheckCA(p *Pair, now time.Time) error {
+	if fe := checkCA(p, now, "cert"); fe != nil {
+		return fe
+	}
+	return nil
+}
+
+// checkCA is CheckCA, reporting problems for the given field.
+func checkCA(p *Pair, now time.Time, field string) *config.FieldError {
+	problem := func(code ProblemCode, value string) *config.FieldError {
+		return &config.FieldError{Field: field, Err: &Problem{Code: code, Value: value}}
+	}
 	ca := p.Leaf()
 	if !ca.BasicConstraintsValid || !ca.IsCA || (ca.KeyUsage != 0 && ca.KeyUsage&x509.KeyUsageCertSign == 0) {
-		return FieldError("cert", NotCA, "")
+		return problem(NotCA, "")
 	}
 	if now.After(ca.NotAfter) {
-		return FieldError("cert", Expired, ca.NotAfter.Format(time.DateOnly))
+		return problem(Expired, ca.NotAfter.Format(time.DateOnly))
 	}
 	return nil
 }
@@ -257,21 +316,25 @@ type Info struct {
 	Issuer  string // likewise
 	// Domains are the DNS names and IP addresses the certificate is valid
 	// for, or its common name if it names none.
-	Domains   []string
-	Key       string // the algorithm and size of the key, such as "EC P-256"
-	NotBefore time.Time
-	NotAfter  time.Time
+	Domains    []string
+	Key        string // the algorithm and size of the key, such as "EC P-256"
+	NotBefore  time.Time
+	NotAfter   time.Time
+	SelfSigned bool // a root, which clients must trust already
 }
 
 // Describe describes the first certificate of p.
-func Describe(p *Pair) Info {
-	c := p.Leaf()
+func Describe(p *Pair) Info { return DescribeCert(p.Leaf()) }
+
+// DescribeCert describes c.
+func DescribeCert(c *x509.Certificate) Info {
 	info := Info{
-		Subject:   nameOf(c.Subject),
-		Issuer:    nameOf(c.Issuer),
-		Key:       keyName(c.PublicKey),
-		NotBefore: c.NotBefore,
-		NotAfter:  c.NotAfter,
+		Subject:    nameOf(c.Subject),
+		Issuer:     nameOf(c.Issuer),
+		Key:        keyName(c.PublicKey),
+		NotBefore:  c.NotBefore,
+		NotAfter:   c.NotAfter,
+		SelfSigned: selfSigned(c),
 	}
 	info.Domains = slices.Clone(c.DNSNames)
 	for _, ip := range c.IPAddresses {
@@ -303,37 +366,22 @@ func keyName(pub crypto.PublicKey) string {
 }
 
 // DefaultName returns the name of a certificate uploaded without one: its
-// first domain, if that makes a valid name.
+// first domain, which sites use by default to find their certificate.
+// Names are config.ValidCertName; it returns "" if that makes none.
 func DefaultName(p *Pair) string {
-	if d := Describe(p).Domains; len(d) > 0 && ValidCertName(d[0]) {
+	if d := Describe(p).Domains; len(d) > 0 && config.ValidCertName(strings.ToLower(d[0])) {
 		return strings.ToLower(d[0])
 	}
 	return ""
 }
 
-// DefaultCAName returns the name of a CA uploaded without one.
+// DefaultCAName returns the name of a CA uploaded without one: its subject,
+// or "" if that makes no valid name.
 func DefaultCAName(p *Pair) string {
-	if name := strings.TrimSpace(nameOf(p.Leaf().Subject)); ValidCAName(name) {
+	if name := strings.TrimSpace(nameOf(p.Leaf().Subject)); config.ValidCertName(name) {
 		return name
 	}
 	return ""
-}
-
-// certName are the names of certificates. Sites refer to certificates by
-// name, and certificates are usually named after their first domain, such
-// as "*.example.com" or "10.0.0.1".
-var certName = regexp.MustCompile(`^[A-Za-z0-9*:_][A-Za-z0-9*:._-]{0,252}$`)
-
-// ValidCertName reports whether name can name a certificate.
-func ValidCertName(name string) bool {
-	return certName.MatchString(name) && config.IsWord(name)
-}
-
-// ValidCAName reports whether name can name a CA: it is shown to people, so
-// it may contain spaces, but it is also part of URLs.
-func ValidCAName(name string) bool {
-	return name != "" && len(name) <= 64 && name == strings.TrimSpace(name) &&
-		!strings.ContainsFunc(name, func(r rune) bool { return r == '/' || !unicode.IsPrint(r) })
 }
 
 // SignRequest describes a certificate for a CA to sign.
@@ -361,7 +409,9 @@ var domainName = regexp.MustCompile(`^(\*\.)?[A-Za-z0-9_]([A-Za-z0-9_-]*[A-Za-z0
 // Check checks req, normalizing its domains to lower case without
 // duplicates. Problems are reported for the fields "domains", "days" and
 // "key_type".
-func (req *SignRequest) Check() error {
+func (req *SignRequest) Check() error { return orNil(req.check()) }
+
+func (req *SignRequest) check() config.FieldErrors {
 	var errs config.FieldErrors
 	add := func(field string, code ProblemCode, value string) {
 		errs = append(errs, &config.FieldError{Field: field, Err: &Problem{Code: code, Value: value}})
@@ -387,25 +437,48 @@ func (req *SignRequest) Check() error {
 	if req.KeyType != KeyEC && req.KeyType != KeyRSA {
 		add("key_type", InvalidKeyType, req.KeyType)
 	}
-	if len(errs) > 0 {
-		return errs
+	return errs
+}
+
+// KeyName describes the key of a certificate signed with the given key
+// type, like Info.Key.
+func KeyName(keyType string) string {
+	if keyType == KeyRSA {
+		return "RSA 2048"
 	}
-	return nil
+	return "EC P-256"
+}
+
+// Plan checks that ca can sign the certificate described by req at now,
+// normalizing req like Check, and returns when the certificate would be
+// valid. All problems found are reported: those of Check, and those with
+// the CA for the field "authority". ca may be nil if it is missing, which
+// the caller reports.
+func Plan(ca *Pair, req *SignRequest, now time.Time) (notBefore, notAfter time.Time, err error) {
+	errs := req.check()
+	// Allow for clocks running a little behind.
+	notBefore = now.Add(-time.Hour)
+	notAfter = now.Add(time.Duration(req.Days) * 24 * time.Hour)
+	if ca != nil {
+		if fe := checkCA(ca, now, "authority"); fe != nil {
+			errs = append(errs, fe)
+		} else {
+			notBefore = later(notBefore, ca.Leaf().NotBefore)
+			if req.Days >= 1 && req.Days <= MaxDays && notAfter.After(ca.Leaf().NotAfter) {
+				errs = append(errs, &config.FieldError{Field: "days", Err: &Problem{Code: BeyondCA, Value: ca.Leaf().NotAfter.Format(time.DateOnly)}})
+			}
+		}
+	}
+	return notBefore, notAfter, orNil(errs)
 }
 
 // Sign has ca sign a new certificate for a website, with a new key, as
 // described by req. The chain of the result includes the CA's chain, except
 // for its root, which clients have to trust anyway.
 func Sign(ca *Pair, req SignRequest, now time.Time) (*Pair, error) {
-	if err := req.Check(); err != nil {
+	notBefore, notAfter, err := Plan(ca, &req, now)
+	if err != nil {
 		return nil, err
-	}
-	if err := CheckCA(ca, now); err != nil {
-		return nil, err
-	}
-	notAfter := now.Add(time.Duration(req.Days) * 24 * time.Hour)
-	if notAfter.After(ca.Leaf().NotAfter) {
-		return nil, FieldError("days", BeyondCA, ca.Leaf().NotAfter.Format(time.DateOnly))
 	}
 
 	key, err := generateKey(req.KeyType)
@@ -417,10 +490,9 @@ func Sign(ca *Pair, req SignRequest, now time.Time) (*Pair, error) {
 		return nil, err
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: req.Domains[0]},
-		// Allow for clocks running a little behind.
-		NotBefore:             later(now.Add(-time.Hour), ca.Leaf().NotBefore),
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: req.Domains[0]},
+		NotBefore:             notBefore,
 		NotAfter:              notAfter,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
@@ -474,11 +546,4 @@ func later(a, b time.Time) time.Time {
 		return a
 	}
 	return b
-}
-
-// IsProblem reports whether err reports a problem with a request, as
-// opposed to a failure.
-func IsProblem(err error) bool {
-	var p *Problem
-	return errors.As(err, &p)
 }

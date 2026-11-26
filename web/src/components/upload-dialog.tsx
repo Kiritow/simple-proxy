@@ -2,6 +2,7 @@ import { useRef, useState, type ReactNode } from "react"
 import { CircleAlert, FileUp } from "lucide-react"
 import { toast } from "sonner"
 
+import { CertificateDetails } from "@/components/certificate-details"
 import { Output, TextField, useDescribe } from "@/components/form"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -24,6 +25,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { api, errorOf, type ApiError, type FieldProblem } from "@/lib/api"
+import { useCertificatePreview } from "@/lib/hooks"
 import { useI18n } from "@/lib/i18n"
 
 // UploadDialog uploads a certificate, replaces the one named replace, or
@@ -46,16 +48,33 @@ export function UploadDialog({
   const [cert, setCert] = useState("")
   const [key, setKey] = useState("")
   const [busy, setBusy] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
   const [failure, setFailure] = useState<ApiError | null>(null)
+  const preview = useCertificatePreview(
+    kind === "authority" ? api.previewAuthority : api.previewUpload,
+    { name: name.trim(), cert, key, replace: !!replace }
+  )
 
-  const problem = (field: string) =>
-    failure?.fields.find((f) => f.field === field)
+  // The problems of a failed upload are shown until the next change, and
+  // those of the preview as they come, except for what is merely missing
+  // so far.
+  const problems =
+    failure?.fields ??
+    (preview.preview?.problems ?? []).filter(
+      (p) => submitted || (p.code !== "no_certificate" && p.code !== "no_key")
+    )
+  const problem = (field: string) => problems.find((f) => f.field === field)
   const placed = failure?.fields.every((f) =>
     ["name", "cert", "key"].includes(f.field)
   )
+  const change = (set: (value: string) => void) => (value: string) => {
+    set(value)
+    setFailure(null)
+  }
 
   const submit = async () => {
     setBusy(true)
+    setSubmitted(true)
     setFailure(null)
     let uploaded: string
     try {
@@ -91,49 +110,55 @@ export function UploadDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="max-h-[92svh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        <FieldGroup>
-          <TextField
-            id="upload-name"
-            label={t.upload.name}
-            description={
-              kind === "authority" ? t.upload.caNameHint : t.upload.nameHint
-            }
-            placeholder={t.upload.namePlaceholder}
-            className={kind === "certificate" ? "[&_input]:font-mono" : ""}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            error={problem("name")}
-            disabled={busy || !!replace}
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_19rem]">
+          <FieldGroup>
+            <TextField
+              id="upload-name"
+              label={t.upload.name}
+              description={
+                kind === "authority" ? t.upload.caNameHint : t.upload.nameHint
+              }
+              // The name the certificate gets if none is given.
+              placeholder={preview.preview?.name || t.upload.namePlaceholder}
+              value={name}
+              onChange={(e) => change(setName)(e.target.value)}
+              error={problem("name")}
+              disabled={busy || !!replace}
+            />
+            <PemField
+              id="upload-cert"
+              label={t.upload.cert}
+              placeholder={
+                "-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----"
+              }
+              value={cert}
+              onChange={change(setCert)}
+              error={problem("cert")}
+              disabled={busy}
+            />
+            <PemField
+              id="upload-key"
+              label={t.upload.key}
+              description={t.upload.keyHint}
+              placeholder={
+                "-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----"
+              }
+              value={key}
+              onChange={change(setKey)}
+              error={problem("key")}
+              disabled={busy}
+            />
+          </FieldGroup>
+          <CertificateDetails
+            preview={cert.trim() ? preview.preview : null}
+            kind={kind}
           />
-          <PemField
-            id="upload-cert"
-            label={t.upload.cert}
-            placeholder={
-              "-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----"
-            }
-            value={cert}
-            onChange={setCert}
-            error={problem("cert")}
-            disabled={busy}
-          />
-          <PemField
-            id="upload-key"
-            label={t.upload.key}
-            description={t.upload.keyHint}
-            placeholder={
-              "-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----"
-            }
-            value={key}
-            onChange={setKey}
-            error={problem("key")}
-            disabled={busy}
-          />
-        </FieldGroup>
+        </div>
         {failure && !placed && (
           <Alert variant="destructive">
             <CircleAlert />

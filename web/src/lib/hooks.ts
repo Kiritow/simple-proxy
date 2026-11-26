@@ -6,6 +6,7 @@ import {
   type ApiError,
   type Authority,
   type CertificateList,
+  type CertificatePreview,
   type FieldProblem,
   type Preview,
   type Status,
@@ -135,6 +136,45 @@ export function usePreview(site: Site, id: string | null): PreviewState {
       abort.abort()
     }
   }, [site, id, polls])
+
+  return state
+}
+
+export type CertificatePreviewState = {
+  preview: CertificatePreview | null // of the last successful request
+  error: ApiError | null // of the last request
+}
+
+// useCertificatePreview has the server preview the certificate that body
+// describes, shortly after every change.
+export function useCertificatePreview<T>(
+  preview: (body: T, signal: AbortSignal) => Promise<CertificatePreview>,
+  body: T
+): CertificatePreviewState {
+  const [state, setState] = useState<CertificatePreviewState>({
+    preview: null,
+    error: null,
+  })
+  // The body changes identity on every render; its contents matter.
+  const key = JSON.stringify(body)
+
+  useEffect(() => {
+    const abort = new AbortController()
+    const timer = setTimeout(() => {
+      preview(JSON.parse(key) as T, abort.signal).then(
+        (p) => setState({ preview: p, error: null }),
+        (err: unknown) => {
+          if (!abort.signal.aborted) {
+            setState((s) => ({ preview: s.preview, error: errorOf(err) }))
+          }
+        }
+      )
+    }, 300)
+    return () => {
+      clearTimeout(timer)
+      abort.abort()
+    }
+  }, [preview, key])
 
   return state
 }

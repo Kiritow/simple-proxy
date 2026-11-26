@@ -99,6 +99,28 @@ export type Upload = {
   replace: boolean
 }
 
+// CertificatePreview describes what an upload or a signing request would
+// store, as far as the server can tell, and the problems that keep it from
+// being stored.
+export type CertificatePreview = {
+  name: string // as it would be stored
+  subject: string
+  issuer: string
+  domains: string[]
+  key: string
+  not_before?: string
+  not_after?: string
+  chain: ChainEntry[] // the issuers following the certificate
+  has_key: boolean // its private key is known
+  problems: FieldProblem[]
+}
+
+export type ChainEntry = {
+  subject: string
+  not_after: string
+  root: boolean // self-signed: sites do not serve it
+}
+
 export type SignRequest = {
   name: string
   authority: string
@@ -200,6 +222,18 @@ export const api = {
       method: "POST",
       json: req,
     }),
+  previewUpload: (upload: Upload, signal?: AbortSignal) =>
+    request<CertificatePreview>("api/certificates/upload/preview", {
+      method: "POST",
+      json: upload,
+      signal,
+    }),
+  previewSign: (req: SignRequest, signal?: AbortSignal) =>
+    request<CertificatePreview>("api/certificates/sign/preview", {
+      method: "POST",
+      json: req,
+      signal,
+    }),
   deleteCertificate: (name: string) =>
     request<void>(`api/certificates/${encodeURIComponent(name)}`, {
       method: "DELETE",
@@ -211,6 +245,12 @@ export const api = {
     ),
   addAuthority: (upload: Omit<Upload, "replace">) =>
     request<Authority>("api/authorities", { method: "POST", json: upload }),
+  previewAuthority: (upload: Upload, signal?: AbortSignal) =>
+    request<CertificatePreview>("api/authorities/preview", {
+      method: "POST",
+      json: { ...upload, replace: false },
+      signal,
+    }),
   deleteAuthority: (name: string) =>
     request<void>(`api/authorities/${encodeURIComponent(name)}`, {
       method: "DELETE",

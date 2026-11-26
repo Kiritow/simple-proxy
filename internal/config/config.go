@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -37,8 +38,8 @@ type Server struct {
 	ListenPort int `yaml:"listen_port"`
 	// HTTPS enables TLS. See Server.UseHTTPS for its default.
 	HTTPS *bool `yaml:"https"`
-	// CertName is the name of the acme.sh certificate to serve. See
-	// Server.Certificate for its default.
+	// CertName is the name of the certificate to serve, kept by acme.sh or
+	// by simple-proxy. See Server.Certificate for its default.
 	CertName string `yaml:"cert_name"`
 	// Gzip enables compression of common text-based content types.
 	Gzip bool `yaml:"gzip"`
@@ -322,7 +323,7 @@ func (s Server) validate(p *FieldErrors, at string) {
 	if s.ListenPort != 0 && !isPort(s.ListenPort) {
 		p.add(at+".listen_port", InvalidPort, strconv.Itoa(s.ListenPort))
 	}
-	if s.CertName != "" && !IsWord(s.CertName) {
+	if s.CertName != "" && !ValidCertName(s.CertName) {
 		p.add(at+".cert_name", InvalidName, s.CertName)
 	}
 	validateDirectives(p, at+".options", s.Options)
@@ -400,8 +401,22 @@ func checkArgs(args string) (ProblemCode, string) {
 	return "", ""
 }
 
+// MaxCertNameLength is the length limit of certificate names, in
+// characters.
+const MaxCertNameLength = 128
+
+// ValidCertName reports whether name can name a certificate or a CA. Names
+// describe certificates to people and find them, but are never written into
+// nginx's configuration, so they may contain spaces and any other printable
+// characters; they must fit on one line, without surrounding spaces.
+func ValidCertName(name string) bool {
+	return name != "" && name == strings.TrimSpace(name) && utf8.ValidString(name) &&
+		utf8.RuneCountInString(name) <= MaxCertNameLength &&
+		!strings.ContainsFunc(name, unicode.IsControl)
+}
+
 // IsWord reports whether s can be emitted as a single unquoted nginx token,
-// as server and certificate names must be.
+// as server names must be.
 func IsWord(s string) bool {
 	return s != "" && !strings.ContainsFunc(s, func(r rune) bool {
 		return unicode.IsSpace(r) || unicode.IsControl(r) || strings.ContainsRune(`;{}"'\#`, r)

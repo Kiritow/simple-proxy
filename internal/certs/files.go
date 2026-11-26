@@ -15,38 +15,38 @@ import (
 
 // Dir is a directory holding the files of certificates for nginx to read.
 //
-// Each version of a certificate has a directory of its own, named after the
-// certificate and a hash of its contents. Replacing a certificate therefore
-// changes the paths in the nginx configuration: nginx tests the new files,
-// and the old ones stay in place if it rejects them.
+// Each version of a certificate has a directory of its own, named after a
+// hash of its contents, rather than after the certificate, whose name is
+// meant for people. Replacing a certificate therefore changes the paths in
+// the nginx configuration: nginx tests the new files, and the old ones stay
+// in place if it rejects them.
 type Dir string
 
 // Files returns the paths of the files of a certificate, which Write
 // creates.
-func (d Dir) Files(name string, certPEM, keyPEM []byte) nginx.Certificate {
+func (d Dir) Files(certPEM, keyPEM []byte) nginx.Certificate {
 	h := sha256.New()
 	h.Write(certPEM)
 	h.Write([]byte{0})
 	h.Write(keyPEM)
-	// Names are ValidCertName; "*" and ":" are awkward in file names.
-	base := strings.NewReplacer("*", "_", ":", "_").Replace(name) + "-" + hex.EncodeToString(h.Sum(nil)[:8])
-	dir := filepath.Join(string(d), base)
+	dir := filepath.Join(string(d), hex.EncodeToString(h.Sum(nil)[:16]))
 	return nginx.Certificate{
 		Fullchain: filepath.Join(dir, "fullchain.pem"),
 		Key:       filepath.Join(dir, "privkey.pem"),
 	}
 }
 
-// versionDir matches the directories of certificates, so that Prune leaves
-// anything else alone.
-var versionDir = regexp.MustCompile(`^[A-Za-z0-9_.-]+-[0-9a-f]{16}$`)
+// versionDir matches the directories of certificates, also as named by
+// earlier versions after the certificate, so that Prune leaves anything else
+// alone.
+var versionDir = regexp.MustCompile(`^([0-9a-f]{32}|[A-Za-z0-9_.-]+-[0-9a-f]{16})$`)
 
 const tempPrefix = ".tmp-"
 
 // Write creates the files of a certificate, unless they exist. The private
 // key is only readable by its owner, such as root, as nginx reads it.
-func (d Dir) Write(name string, certPEM, keyPEM []byte) error {
-	files := d.Files(name, certPEM, keyPEM)
+func (d Dir) Write(certPEM, keyPEM []byte) error {
+	files := d.Files(certPEM, keyPEM)
 	dir := filepath.Dir(files.Fullchain)
 	if _, err := os.Stat(dir); err == nil {
 		return nil

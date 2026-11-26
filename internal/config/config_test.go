@@ -133,7 +133,7 @@ func TestParseErrors(t *testing.T) {
 		},
 		{
 			"injection through names",
-			"servers:\n- server_name: 'a;b'\n  cert_name: 'c}'\n  default: {port: 1, path: '/x{', ip: 'h;'}\n",
+			"servers:\n- server_name: 'a;b'\n  cert_name: \"c\\nd\"\n  default: {port: 1, path: '/x{', ip: 'h;'}\n",
 			[]string{"server_name: invalid name", "cert_name: invalid name", "default.path:", "default.ip:"},
 		},
 		{
@@ -299,5 +299,22 @@ servers:
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("problems = %+v\nwant %+v", got, want)
+	}
+}
+
+func TestCertNames(t *testing.T) {
+	for name, want := range map[string]bool{
+		"example.com": true, "*.example.com": true, "Shop – wildcard 2026": true, "a/b {c}; d": true, "内网证书": true,
+		strings.Repeat("证", config.MaxCertNameLength): true,
+		"": false, " padded": false, "line\nbreak": false, "tab\there": false, "\xff": false,
+		strings.Repeat("x", config.MaxCertNameLength+1): false,
+	} {
+		if got := config.ValidCertName(name); got != want {
+			t.Errorf("ValidCertName(%q) = %t, want %t", name, got, want)
+		}
+	}
+	// Descriptive names are only used to find certificates.
+	if _, err := config.Parse([]byte("servers:\n- server_name: a.example.com\n  cert_name: 'Shop {wildcard}; 2026'\n  default: {port: 1}\n")); err != nil {
+		t.Errorf("a descriptive cert_name was rejected: %v", err)
 	}
 }

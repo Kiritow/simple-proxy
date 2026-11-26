@@ -238,9 +238,9 @@ export const en = {
       "The certificate of the CA in PEM format, and its private key, which stays on the server to sign certificates.",
     name: "Name",
     nameHint:
-      "Sites refer to the certificate by name. Leave empty to use its first domain.",
+      "Any text; sites choose certificates by name. Leave empty to use the first domain, which sites look for by default.",
     caNameHint: "Leave empty to use the common name of the CA.",
-    namePlaceholder: "From the certificate",
+    namePlaceholder: "Named after the certificate",
     cert: "Certificate",
     key: "Private key",
     keyHint:
@@ -250,6 +250,26 @@ export const en = {
     uploading: "Uploading…",
     uploaded: (name: string) => `Uploaded ${name}`,
     failed: "The certificate could not be uploaded",
+  },
+  details: {
+    title: "Certificate details",
+    emptyUpload: "Paste or open a certificate to see its details.",
+    emptySign: "Enter its domains to see the certificate.",
+    name: "Name",
+    subject: "Subject",
+    domains: "Domains",
+    issuer: "Issued by",
+    selfSigned: "Itself (self-signed)",
+    validity: "Valid",
+    key: "Key",
+    keyFound: "Private key matches",
+    keyMissing: "No matching private key yet",
+    keyNew: "New, generated on the server",
+    chain: "Chain",
+    chainEmpty: "None",
+    until: (date: string) => `until ${date}`,
+    root: "root",
+    rootNotServed: "root, not sent to clients",
   },
   sign: {
     title: "Sign a certificate",
@@ -348,10 +368,8 @@ export const en = {
     key_mismatch: () => "This key does not belong to the certificate.",
     not_ca: () => "This is not the certificate of a CA.",
     expired: (v: string) => `It expired on ${v}.`,
-    invalid_cert_name: (v: string) =>
-      `"${v}" is not a valid name. Use letters, digits and . - _ * :`,
-    invalid_ca_name: (v: string) =>
-      `"${v}" is not a valid name: at most 64 characters, without /.`,
+    invalid_cert_name: () =>
+      "Names must fit on one line, with at most 128 characters.",
     name_in_use: (v: string) => `The name ${v} is taken.`,
     ca_not_found: (v: string) => `There is no CA named ${v}.`,
     no_domains: () => "Enter at least one domain.",

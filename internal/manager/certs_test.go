@@ -161,19 +161,22 @@ func TestCertificateNames(t *testing.T) {
 	if field, code := problemOf(err); field != "name" || code != string(certs.NameInUse) {
 		t.Errorf("shadowing acme.sh: %v", err)
 	}
-	_, err = e.m.UploadCertificate(ctx, manager.UploadRequest{Name: "a b", Cert: cert, Key: key})
+	_, err = e.m.UploadCertificate(ctx, manager.UploadRequest{Name: "line\nbreak", Cert: cert, Key: key})
 	if field, code := problemOf(err); field != "name" || code != string(certs.InvalidCertName) {
 		t.Errorf("invalid name: %v", err)
 	}
-	if _, err := e.m.UploadCertificate(ctx, manager.UploadRequest{Name: "wild", Cert: cert, Key: key}); err != nil {
+	// Names describe certificates; they never reach nginx's configuration.
+	const wild = `Wildcard {example.com}; "2026" / 商店`
+	if _, err := e.m.UploadCertificate(ctx, manager.UploadRequest{Name: " " + wild + " ", Cert: cert, Key: key}); err != nil {
 		t.Fatal(err)
 	}
 	// acme.sh cannot issue one hidden by it.
-	if _, err := e.m.IssueCertificate(ctx, []string{"wild"}, "dns_cf"); !errors.Is(err, acme.ErrInvalidRequest) {
+	if _, err := e.m.IssueCertificate(ctx, []string{wild}, "dns_cf"); !errors.Is(err, acme.ErrInvalidRequest) {
 		t.Errorf("issuing a hidden certificate: %v", err)
 	}
 	// Sites find uploaded certificates before those of acme.sh, and both.
-	if _, err := e.m.CreateSite(ctx, json.RawMessage(`{"server_name": "a.example.com", "cert_name": "wild", "default": {"port": 1}}`)); err != nil {
+	site, _ := json.Marshal(map[string]any{"server_name": "a.example.com", "cert_name": wild, "default": map[string]int{"port": 1}})
+	if _, err := e.m.CreateSite(ctx, site); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.m.CreateSite(ctx, json.RawMessage(`{"server_name": "b.example.com", "cert_name": "*.example.com", "default": {"port": 1}}`)); err != nil {
@@ -182,6 +185,81 @@ func TestCertificateNames(t *testing.T) {
 	conf := e.nginxConf(t)
 	if !strings.Contains(conf, `ssl_certificate "/c/full.cer"`) || !strings.Contains(conf, `ssl_certificate "`+e.certDir) {
 		t.Errorf("want certificates of both sources in\n%s", conf)
+	}
+	if strings.Contains(conf, "Wildcard") || !regexp.MustCompile(`/[0-9a-f]{32}/fullchain\.pem"`).MatchString(conf) {
+		t.Errorf("want files named after hashes, not the certificate, in\n%s", conf)
+	}
+}
+
+func TestPreviews(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	rootCert, rootKey := certstest.CA(t, "Home Root CA") // valid for a year
+	cert, key := certstest.Leaf(t, rootCert, rootKey, "app.example.com", "10.0.0.1")
+	codes := func(problems config.FieldErrors) []string {
+		var out []string
+		for _, fe := range problems {
+			field, code := problemOf(fe)
+			out = append(out, field+": "+code)
+		}
+		return out
+	}
+
+	// While the key is missing, the certificate is described.
+	p, problems, err := e.m.PreviewUpload(ctx, manager.UploadRequest{Cert: rootCert + cert}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Name != "app.example.com" || p.Issuer != "Home Root CA" || strings.Join(p.Domains, " ") != "app.example.com 10.0.0.1" ||
+		p.NotAfter == "" || p.HasKey || len(p.Chain) != 1 || !p.Chain[0].Root || p.Chain[0].Subject != "Home Root CA" {
+		t.Errorf("PreviewUpload = %+v", p)
+	}
+	if got := codes(problems); strings.Join(got, ", ") != "key: no_key" {
+		t.Errorf("problems %v, want the missing key", got)
+	}
+	if p, problems, _ = e.m.PreviewUpload(ctx, manager.UploadRequest{Name: "App", Cert: cert, Key: key}, false); !p.HasKey || p.Name != "App" || len(problems) > 0 {
+		t.Errorf("complete upload: %+v, %v", p, problems)
+	}
+	// A leaf is no CA; nothing is stored.
+	if _, problems, _ = e.m.PreviewUpload(ctx, manager.UploadRequest{Cert: cert, Key: key}, true); strings.Join(codes(problems), ", ") != "cert: not_ca" {
+		t.Errorf("a leaf as CA: %v", codes(problems))
+	}
+	if list, _ := e.m.Certificates(ctx); len(list.Certificates) != 1 { // that of acme.sh
+		t.Errorf("previews stored certificates: %+v", list)
+	}
+
+	if _, err := e.m.AddAuthority(ctx, manager.UploadRequest{Cert: rootCert, Key: rootKey}); err != nil {
+		t.Fatal(err)
+	}
+	if _, problems, _ = e.m.PreviewUpload(ctx, manager.UploadRequest{Cert: rootCert, Key: rootKey}, true); strings.Join(codes(problems), ", ") != "name: name_in_use" {
+		t.Errorf("a CA of the same name: %v", codes(problems))
+	}
+
+	// Signing previews report every problem at once, and what they can.
+	req := manager.SignRequest{Authority: "Home Root CA", Domains: []string{"NAS.lan", "a b"}, Days: 400, KeyType: certs.KeyRSA}
+	p, problems, err = e.m.PreviewSign(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := codes(problems); strings.Join(got, ", ") != "domains: invalid_domain, days: beyond_ca" {
+		t.Errorf("problems %v", got)
+	}
+	if p.Name != "nas.lan" || p.Subject != "nas.lan" || p.Issuer != "Home Root CA" || p.Key != "RSA 2048" || p.NotAfter == "" || !p.HasKey || len(p.Chain) != 1 {
+		t.Errorf("PreviewSign = %+v", p)
+	}
+	if _, problems, _ = e.m.PreviewSign(ctx, manager.SignRequest{Domains: []string{"x.lan"}, Days: 1, KeyType: certs.KeyEC}); strings.Join(codes(problems), ", ") != "authority: required" {
+		t.Errorf("without a CA: %v", codes(problems))
+	}
+	req = manager.SignRequest{Authority: "Home Root CA", Domains: []string{"nas.lan"}, Days: 30, KeyType: certs.KeyEC}
+	if _, err := e.m.SignCertificate(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if _, problems, _ = e.m.PreviewSign(ctx, req); strings.Join(codes(problems), ", ") != "name: name_in_use" {
+		t.Errorf("signing a duplicate: %v", codes(problems))
+	}
+	req.Replace = true
+	if _, problems, _ = e.m.PreviewSign(ctx, req); len(problems) > 0 {
+		t.Errorf("renewing: %v", codes(problems))
 	}
 }
 

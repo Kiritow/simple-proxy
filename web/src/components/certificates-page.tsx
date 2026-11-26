@@ -13,8 +13,8 @@ import {
   Upload,
 } from "lucide-react"
 import { toast } from "sonner"
-import { cn } from "cn"
 
+import { Expiry } from "@/components/certificate-details"
 import { ConfirmButton, IconButton, PageHeader } from "@/components/form"
 import { IssueDialog } from "@/components/issue-dialog"
 import { SignDialog } from "@/components/sign-dialog"
@@ -62,9 +62,6 @@ type Dialog =
   | { kind: "upload"; replace?: string }
   | { kind: "authority" }
   | { kind: "sign"; authority?: string; renew?: Certificate }
-
-// Certificates expiring within this many days are highlighted.
-const SOON_DAYS = 30
 
 export function CertificatesPage({
   certs,
@@ -198,7 +195,7 @@ export function CertificatesPage({
             <TableBody>
               {certs.data.certificates.map((cert) => (
                 <TableRow key={`${cert.source} ${cert.name} ${cert.key}`}>
-                  <TableCell className="pl-4 font-mono text-xs font-medium">
+                  <TableCell className="max-w-56 pl-4 font-medium break-words whitespace-normal">
                     {cert.name}
                   </TableCell>
                   <TableCell>
@@ -471,28 +468,4 @@ function Validity({ cert }: { cert: Certificate }) {
     )
   }
   return null
-}
-
-function Expiry({ date }: { date: string }) {
-  const { t, lang } = useI18n()
-  const [now] = useState(Date.now) // when shown; the page is not left open for days
-  const days = (new Date(date).getTime() - now) / 86_400_000
-  if (days < 0) {
-    return (
-      <span className="flex flex-col items-start gap-1 text-xs">
-        <Badge variant="destructive">{t.certs.expired}</Badge>
-        {formatDate(date, lang)}
-      </span>
-    )
-  }
-  return (
-    <span
-      className={cn(
-        "text-xs",
-        days < SOON_DAYS && "font-medium text-amber-700 dark:text-amber-400"
-      )}
-    >
-      {formatDate(date, lang)}
-    </span>
-  )
 }

@@ -285,7 +285,7 @@ func TestSign(t *testing.T) {
 		{"too long", root, certs.SignRequest{Domains: []string{"a.example.com"}, Days: certs.MaxDays + 1, KeyType: certs.KeyEC}, "days", certs.InvalidDays},
 		{"beyond the CA", inter, certs.SignRequest{Domains: []string{"a.example.com"}, Days: 365, KeyType: certs.KeyEC}, "days", certs.BeyondCA},
 		{"key type", root, certs.SignRequest{Domains: []string{"a.example.com"}, Days: 1, KeyType: "dsa"}, "key_type", certs.InvalidKeyType},
-		{"not a CA", leafPair(t, rootCert, rootKey, "a.example.com"), certs.SignRequest{Domains: []string{"b.example.com"}, Days: 1, KeyType: certs.KeyEC}, "cert", certs.NotCA},
+		{"not a CA", leafPair(t, rootCert, rootKey, "a.example.com"), certs.SignRequest{Domains: []string{"b.example.com"}, Days: 1, KeyType: certs.KeyEC}, "authority", certs.NotCA},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := certs.Sign(tc.ca, tc.req, now)
@@ -296,22 +296,95 @@ func TestSign(t *testing.T) {
 	}
 }
 
-func TestNames(t *testing.T) {
-	for name, want := range map[string]bool{
-		"example.com": true, "*.example.com": true, "10.0.0.1": true, "::1": true, "my_cert-2": true,
-		"": false, "a b": false, "a/b": false, "a;b": false, ".hidden": false, "x{": false,
-	} {
-		if got := certs.ValidCertName(name); got != want {
-			t.Errorf("ValidCertName(%q) = %t, want %t", name, got, want)
-		}
+func TestDefaultNames(t *testing.T) {
+	caCert, caKey := certstest.CA(t, "  Home Lab Root CA ")
+	if got := certs.DefaultCAName(certstest.Parse(t, caCert, caKey)); got != "Home Lab Root CA" {
+		t.Errorf("DefaultCAName = %q", got)
 	}
-	for name, want := range map[string]bool{
-		"Home Lab Root CA": true, "CA": true,
-		"": false, " CA": false, "a/b": false, "a\nb": false, strings.Repeat("x", 65): false,
+	if got := certs.DefaultName(leafPair(t, caCert, caKey, "Shop.Example.com", "10.0.0.1")); got != "shop.example.com" {
+		t.Errorf("DefaultName = %q", got)
+	}
+}
+
+// TestRead reads what it can of incomplete or wrong uploads, for previews.
+func TestRead(t *testing.T) {
+	caCert, caKey := certstest.CA(t, "Root")
+	cert, key := certstest.Leaf(t, caCert, caKey, "example.com")
+	_, otherKey := certstest.Leaf(t, caCert, caKey, "other.example.com")
+	garbage := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte{1}}))
+
+	for _, tc := range []struct {
+		name      string
+		cert, key string
+		leaf      string // common name of the first certificate; "" for none
+		hasKey    bool
+		problems  []string
+	}{
+		{"complete", caCert + cert, key, "example.com", true, nil},
+		{"no key yet", caCert + cert, "", "example.com", false, []string{"key: no_key"}},
+		{"wrong key", cert + caCert, otherKey, "example.com", false, []string{"key: key_mismatch"}},
+		{"nothing yet", "", "", "", false, []string{"cert: no_certificate", "key: no_key"}},
+		{"garbage and an encrypted key", garbage, "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAQ==\n-----END ENCRYPTED PRIVATE KEY-----\n", "", false,
+			[]string{"cert: invalid_certificate", "key: encrypted_key"}},
 	} {
-		if got := certs.ValidCAName(name); got != want {
-			t.Errorf("ValidCAName(%q) = %t, want %t", name, got, want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := certs.Read([]byte(tc.cert), []byte(tc.key))
+			var got []string
+			for _, fe := range fieldErrorsOf(err) {
+				_, code := problem(fe)
+				got = append(got, fe.Field+": "+string(code))
+			}
+			if !slices.Equal(got, tc.problems) {
+				t.Errorf("problems %v, want %v", got, tc.problems)
+			}
+			leaf := ""
+			if len(p.Chain) > 0 {
+				leaf = p.Leaf().Subject.CommonName
+			}
+			if leaf != tc.leaf || (p.Key != nil) != tc.hasKey {
+				t.Errorf("first certificate %q with key %t, want %q with key %t", leaf, p.Key != nil, tc.leaf, tc.hasKey)
+			}
+			if _, err := certs.Parse([]byte(tc.cert), []byte(tc.key)); (err == nil) != (tc.problems == nil) {
+				t.Errorf("Parse error = %v", err)
+			}
+		})
+	}
+}
+
+func fieldErrorsOf(err error) config.FieldErrors {
+	var errs config.FieldErrors
+	errors.As(err, &errs)
+	return errs
+}
+
+// TestPlan reports all problems with a signing request at once, for
+// previews.
+func TestPlan(t *testing.T) {
+	now := time.Now()
+	caCert, caKey := certstest.CA(t, "Root") // valid for a year
+	ca := certstest.Parse(t, caCert, caKey)
+	req := certs.SignRequest{Domains: []string{"a b", "B.example.com"}, Days: 400, KeyType: "dsa"}
+	_, _, err := certs.Plan(ca, &req, now)
+	var got []string
+	for _, fe := range fieldErrorsOf(err) {
+		_, code := problem(fe)
+		got = append(got, fe.Field+": "+string(code))
+	}
+	if want := []string{"domains: invalid_domain", "key_type: invalid_key_type", "days: beyond_ca"}; !slices.Equal(got, want) {
+		t.Errorf("problems %v, want %v", got, want)
+	}
+	if !slices.Equal(req.Domains, []string{"a b", "b.example.com"}) {
+		t.Errorf("domains %v, want them normalized", req.Domains)
+	}
+
+	req = certs.SignRequest{Domains: []string{"a.example.com"}, Days: 30, KeyType: certs.KeyEC}
+	notBefore, notAfter, err := certs.Plan(ca, &req, now)
+	if err != nil || notBefore.After(now) || notAfter.Sub(now) != 30*24*time.Hour {
+		t.Errorf("Plan = %v, %v, %v", notBefore, notAfter, err)
+	}
+	_, _, err = certs.Plan(ca, &req, now.AddDate(2, 0, 0))
+	if field, code := problem(err); field != "authority" || code != certs.Expired {
+		t.Errorf("Plan with an expired CA: %v, want expired on authority", err)
 	}
 }
 
@@ -329,17 +402,23 @@ func TestDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := d.Files("*.example.com", []byte("cert"), []byte("key"))
-	b := d.Files("*.example.com", []byte("cert 2"), []byte("key"))
-	if a.Fullchain == b.Fullchain || !strings.HasPrefix(filepath.Base(filepath.Dir(a.Fullchain)), "_.example.com-") || a.CA != "" {
-		t.Errorf("Files = %+v and %+v, want distinct directories named after the certificate", a, b)
+	// A directory of the first version, named after the certificate.
+	legacy := filepath.Join(string(d), "_.example.com-0123456789abcdef")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := d.Files([]byte("cert"), []byte("key"))
+	b := d.Files([]byte("cert 2"), []byte("key"))
+	if a.Fullchain == b.Fullchain || len(filepath.Base(filepath.Dir(a.Fullchain))) != 32 || a.CA != "" {
+		t.Errorf("Files = %+v and %+v, want distinct directories named after hashes", a, b)
 	}
 	for _, c := range []string{"cert", "cert 2"} {
-		if err := d.Write("*.example.com", []byte(c), []byte("key")); err != nil {
+		if err := d.Write([]byte(c), []byte("key")); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := d.Write("*.example.com", []byte("cert"), []byte("key")); err != nil {
+	if err := d.Write([]byte("cert"), []byte("key")); err != nil {
 		t.Errorf("writing existing files: %v", err)
 	}
 	if got, err := os.ReadFile(a.Fullchain); err != nil || string(got) != "cert" {
@@ -353,8 +432,10 @@ func TestDir(t *testing.T) {
 	if err := d.Prune([]nginx.Certificate{b}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(a.Fullchain); !os.IsNotExist(err) {
-		t.Errorf("the old version was kept: %v", err)
+	for _, gone := range []string{a.Fullchain, legacy} {
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Errorf("%s was kept: %v", gone, err)
+		}
 	}
 	for _, kept := range []string{b.Key, filepath.Join(string(d), "mine"), filepath.Join(string(d), "fallback.cer")} {
 		if _, err := os.Stat(kept); err != nil {

@@ -408,7 +408,7 @@ func sameSite(a, b store.Site) bool { return a.ID == b.ID && bytes.Equal(a.Confi
 // writeCerts writes the files of the certificates of st for nginx.
 func (m *Manager) writeCerts(st state) error {
 	for _, c := range st.certs {
-		if err := m.opts.CertDir.Write(c.Name, c.CertPEM, c.KeyPEM); err != nil {
+		if err := m.opts.CertDir.Write(c.CertPEM, c.KeyPEM); err != nil {
 			return fmt.Errorf("writing the files of certificate %s: %w", c.Name, err)
 		}
 	}
@@ -419,7 +419,7 @@ func (m *Manager) writeCerts(st state) error {
 func (m *Manager) pruneCerts(st state) {
 	keep := make([]nginx.Certificate, len(st.certs))
 	for i, c := range st.certs {
-		keep[i] = m.opts.CertDir.Files(c.Name, c.CertPEM, c.KeyPEM)
+		keep[i] = m.opts.CertDir.Files(c.CertPEM, c.KeyPEM)
 	}
 	if err := m.opts.CertDir.Prune(keep); err != nil {
 		m.opts.Logger.Warn("removing the files of old certificates", "err", err)
@@ -494,7 +494,7 @@ type locator struct {
 func (l locator) LocateCert(ctx context.Context, name string) (nginx.Certificate, error) {
 	for _, c := range l.certs {
 		if c.Name == name {
-			return l.dir.Files(c.Name, c.CertPEM, c.KeyPEM), nil
+			return l.dir.Files(c.CertPEM, c.KeyPEM), nil
 		}
 	}
 	if l.next != nil {

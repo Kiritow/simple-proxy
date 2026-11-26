@@ -117,7 +117,7 @@ export function CertificateField({
             {names.length > 0 && <SelectSeparator />}
             {names.map((name) => (
               <SelectItem key={name} value={name}>
-                <span className="font-mono">{name}</span>
+                <span>{name}</span>
                 {known.has(name) && (
                   <span className="text-xs text-muted-foreground">
                     {t.certs.sources[sourceOf(name) ?? "acme"]}

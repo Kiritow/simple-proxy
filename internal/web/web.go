@@ -57,9 +57,12 @@ type Options struct {
 //	POST   /api/certificates  have acme.sh issue one: {"domains": ["..."], "dns": "dns_cf"}
 //	POST   /api/certificates/upload  upload one: {"name": "...", "cert": "PEM", "key": "PEM", "replace": false}
 //	POST   /api/certificates/sign    have a CA sign one: {"name": "...", "authority": "...", "domains": ["..."], "days": 365, "key_type": "ec", "replace": false}
+//	POST   /api/certificates/upload/preview  what uploading would store, without storing it
+//	POST   /api/certificates/sign/preview    what signing would store, without signing
 //	DELETE /api/certificates/{name}  remove an uploaded or signed one
 //	GET    /api/authorities          the CAs: {"authorities": [...]}
 //	POST   /api/authorities          upload one: {"name": "...", "cert": "PEM", "key": "PEM"}
+//	POST   /api/authorities/preview  what uploading one would store
 //	DELETE /api/authorities/{name}   remove one
 //	GET    /api/authorities/{name}/cert.pem  its certificate, for clients to trust
 //	POST   /api/validate      204 if the configuration in the body is valid
@@ -87,6 +90,14 @@ type Options struct {
 // servers[0]; those with uploads and signing requests name their fields. Only
 // validate and generate answer in plain text, unless the request accepts
 // application/json. Private keys are never sent.
+//
+// Certificate previews answer 200 with the certificate as far as it can be
+// read, and the problems that keep it from being stored, which are expected
+// while it is being entered:
+//
+//	{"name": "...", "subject": "...", "issuer": "...", "domains": [...], "key": "EC P-256",
+//	 "not_before": "...", "not_after": "...", "chain": [{"subject": "...", "not_after": "...", "root": true}],
+//	 "has_key": true, "problems": [{"field": "key", "message": "...", "code": "key_mismatch"}]}
 func NewHandler(opts Options) http.Handler {
 	ui, err := fs.Sub(dist, "dist")
 	if err != nil {
@@ -117,6 +128,9 @@ func NewHandler(opts Options) http.Handler {
 	mux.HandleFunc("POST /api/certificates", h.issueCertificate)
 	mux.HandleFunc("POST /api/certificates/upload", h.uploadCertificate)
 	mux.HandleFunc("POST /api/certificates/sign", h.signCertificate)
+	mux.HandleFunc("POST /api/certificates/upload/preview", h.previewUpload(false))
+	mux.HandleFunc("POST /api/certificates/sign/preview", h.previewSign)
+	mux.HandleFunc("POST /api/authorities/preview", h.previewUpload(true))
 	mux.HandleFunc("DELETE /api/certificates/{name}", h.deleteCertificate)
 	mux.HandleFunc("GET /api/authorities", h.authorities)
 	mux.HandleFunc("POST /api/authorities", h.addAuthority)
@@ -307,6 +321,43 @@ func (h *handler) signCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, cert)
+}
+
+type previewResponse struct {
+	manager.CertificatePreview
+	Problems []fieldError `json:"problems"`
+}
+
+func (h *handler) previewUpload(authority bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req manager.UploadRequest
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		p, problems, err := h.m.PreviewUpload(r.Context(), req, authority)
+		h.writePreview(w, r, p, problems, err)
+	}
+}
+
+func (h *handler) previewSign(w http.ResponseWriter, r *http.Request) {
+	var req manager.SignRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	p, problems, err := h.m.PreviewSign(r.Context(), req)
+	h.writePreview(w, r, p, problems, err)
+}
+
+func (h *handler) writePreview(w http.ResponseWriter, r *http.Request, p manager.CertificatePreview, problems config.FieldErrors, err error) {
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	resp := previewResponse{CertificatePreview: p, Problems: []fieldError{}}
+	if len(problems) > 0 {
+		resp.Problems = describe(problems).Fields
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *handler) deleteCertificate(w http.ResponseWriter, r *http.Request) {

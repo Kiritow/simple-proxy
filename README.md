@@ -84,16 +84,23 @@ openssl req -x509 -newkey rsa:4096 -nodes -days 3650 -subj "/CN=example.com" \
 ### Uploaded and signed certificates
 
 Certificates kept by simple-proxy are written to `-cert-dir` as
-`<name>-<hash>/fullchain.pem` and `privkey.pem` (readable only by the owner;
-nginx reads keys as root). Each version of a certificate gets a directory of
-its own, so replacing or renewing a certificate changes the paths in the
-configuration: nginx tests the new files before using them, and if it rejects
-them, nothing changes. Old versions are removed once nginx runs the new ones,
-and the files are written again on startup if they are missing.
+`<hash>/fullchain.pem` and `privkey.pem`, named after a hash of their
+contents (keys are readable only by the owner; nginx reads them as root).
+Each version of a certificate gets a directory of its own, so replacing or
+renewing a certificate changes the paths in the configuration: nginx tests
+the new files before using them, and if it rejects them, nothing changes. Old
+versions are removed once nginx runs the new ones, and the files are written
+again on startup if they are missing.
 
-Sites refer to certificates by name, whatever their source. A name is used
-by one certificate only: one uploaded or signed here takes precedence over
-acme.sh's, so neither can take a name the other has. Uploads accept PEM
+Sites refer to certificates by name, whatever their source. Names of
+certificates and CAs describe them to people, e.g. `Shop – wildcard 2026`:
+any text on one line, up to 128 characters, which is never written into
+nginx's configuration. Uploaded certificates are named after their first
+domain unless named otherwise, as sites look for that name by default. A name
+is used by one certificate only: one uploaded or signed here takes precedence
+over acme.sh's, so neither can take a name the other has. While a certificate
+is being uploaded or signed, the console shows its details (domains, issuer,
+validity, key and chain) and any problems with it. Uploads accept PEM
 certificates with their chain in any order (the root is not served), and
 unencrypted PKCS #1, PKCS #8 or SEC 1 keys, in the same text or separately.
 Signed certificates use a new ECDSA P-256 or RSA 2048 key, and the CA's
@@ -220,9 +227,10 @@ The console is built on this API, which scripts can use as well. A site's
 | `POST /api/certificates`  | Request one from acme.sh: `{"domains": ["example.com"], "dns": "dns_cf"}`; without `dns`, over HTTP. |
 | `POST /api/certificates/upload` | Upload one: `{"name": "...", "cert": "PEM", "key": "PEM", "replace": false}`; without `name`, it is named after its first domain. |
 | `POST /api/certificates/sign` | Have a CA sign one: `{"authority": "...", "domains": ["nas.lan"], "days": 365, "key_type": "ec", "name": "...", "replace": false}`; `key_type` is `ec` or `rsa`. |
+| `POST /api/certificates/upload/preview`, `/sign/preview` | What uploading or signing would store, without storing it: `{"name": "...", "subject": "...", "issuer": "...", "domains": [...], "not_after": "...", "chain": [...], "has_key": true, "problems": [...]}`, as far as it can be read, with the problems that would make it fail. |
 | `DELETE /api/certificates/{name}` | Delete an uploaded or signed certificate that no enabled site uses. |
 | `GET /api/authorities`    | The CAs: `{"authorities": [{"name": "...", "subject": "...", "expires": "...", "signed": 1}]}`. |
-| `POST /api/authorities`   | Upload a CA: `{"name": "...", "cert": "PEM", "key": "PEM"}`; without `name`, it is named after its common name. |
+| `POST /api/authorities`   | Upload a CA: `{"name": "...", "cert": "PEM", "key": "PEM"}`; without `name`, it is named after its common name. `POST /api/authorities/preview` previews it. |
 | `DELETE /api/authorities/{name}` | Delete a CA; the certificates it signed stay. |
 | `GET /api/authorities/{name}/cert.pem` | The CA's certificate, to install on clients. |
 | `POST /api/generate`      | The configuration generated from a YAML or JSON configuration, without storing anything. |

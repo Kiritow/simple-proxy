@@ -77,7 +77,6 @@ test("problem codes match those of the server", () => {
     "not_ca",
     "expired",
     "invalid_cert_name",
-    "invalid_ca_name",
     "name_in_use",
     "ca_not_found",
     "no_domains",
