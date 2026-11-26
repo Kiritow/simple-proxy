@@ -105,6 +105,54 @@ export function rawCertificates(raw: string): string[] {
 // certificateOf returns the name of the certificate served by s.
 export const certificateOf = (s: Site) => s.certName || domainsOf(s)[0] || ""
 
+// certificatesOf returns the names of the certificates a site serves: the
+// one of an HTTPS site, or those its raw configuration refers to.
+export function certificatesOf(s: Site): string[] {
+  if (s.raw !== null) return rawCertificates(s.raw)
+  return s.https ? [certificateOf(s)] : []
+}
+
+// upstreamOf describes where the main route of s goes, if it is on, such as
+// "http://127.0.0.1:3000".
+export function upstreamOf(s: Site): string | undefined {
+  if (!s.root.enabled) return undefined
+  return upstream(s.root.host, s.root.port)
+}
+
+// routeUpstreamOf describes where a route of s goes: its empty upstream
+// fields are those of the main route.
+export function routeUpstreamOf(s: Site, r: Route): string {
+  return upstream(r.host || s.root.host, r.port || s.root.port)
+}
+
+function upstream(host: string, port: string): string {
+  const h = host.trim() || DEFAULT_HOST
+  return `http://${h.includes(":") ? `[${h}]` : h}:${port.trim() || "?"}`
+}
+
+// matchesSearch tells whether a site matches a search: whether each of its
+// words, in any case, is part of what the sites list shows of the site, or
+// of its raw configuration. Its domains, certificates, upstreams, and the
+// paths of its routes are searched.
+export function matchesSearch(s: Site, search: string): boolean {
+  const words = search.toLowerCase().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return true
+  const text = [
+    ...domainsOf(s),
+    ...certificatesOf(s),
+    s.raw ?? "",
+    ...(s.raw !== null
+      ? []
+      : [
+          upstreamOf(s) ?? "",
+          ...s.routes.flatMap((r) => [r.path, routeUpstreamOf(s, r)]),
+        ]),
+  ]
+    .join("\n")
+    .toLowerCase()
+  return words.every((w) => text.includes(w))
+}
+
 // certCovers reports whether the certificate named cert is valid for domain.
 export function certCovers(cert: string, domain: string): boolean {
   if (cert === domain) return true

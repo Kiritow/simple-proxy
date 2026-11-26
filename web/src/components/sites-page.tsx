@@ -79,14 +79,14 @@ import { formatAgo, formatDateTime } from "@/lib/format"
 import { useNow, useStoredState, type Resource } from "@/lib/hooks"
 import { describeProblem, useI18n } from "@/lib/i18n"
 import {
-  certificateOf,
-  rawCertificates,
-  DEFAULT_HOST,
+  certificatesOf,
   domainsOf,
   fromStored,
+  matchesSearch,
   parseYaml,
   toServer,
   toYaml,
+  upstreamOf,
   type Site,
 } from "@/lib/model"
 import {
@@ -158,27 +158,10 @@ export function SitesPage({
       site,
       name: nameOf(site, site.raw !== null ? t.sites.raw : t.sites.newSite),
       domains: domainsOf(site),
-      certs:
-        site.raw !== null
-          ? rawCertificates(site.raw)
-          : site.https
-            ? [certificateOf(site)]
-            : [],
+      certs: certificatesOf(site),
     }
   })
-  const q = query.trim().toLowerCase()
-  const matching = q
-    ? rows.filter(({ site }) =>
-        [
-          site.serverName,
-          upstreamOf(site) ?? "",
-          ...site.routes.map((r) => r.path),
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(q)
-      )
-    : rows
+  const matching = rows.filter(({ site }) => matchesSearch(site, query))
   const shown = sortBy(matching, sort, ({ stored, domains }) => ({
     name: domains[0],
     created: stored.created_at,
@@ -745,12 +728,4 @@ function Modified({
 
 function nameOf(site: Site, fallback: string): string {
   return domainsOf(site)[0] ?? fallback
-}
-
-// upstreamOf describes where the main route of site goes, if it is on.
-function upstreamOf(site: Site): string | undefined {
-  if (!site.root.enabled) return undefined
-  const host = site.root.host || DEFAULT_HOST
-  const port = site.root.port || "?"
-  return `http://${host.includes(":") ? `[${host}]` : host}:${port}`
 }

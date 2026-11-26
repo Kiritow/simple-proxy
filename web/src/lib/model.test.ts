@@ -7,6 +7,7 @@ import {
   certCovers,
   domainsOf,
   fromStored,
+  matchesSearch,
   newRoute,
   newSite,
   parseYaml,
@@ -187,6 +188,51 @@ test("stored sites keep their IDs and content", () => {
   const loaded = fromStored(JSON.parse(JSON.stringify(stored)))
   assert.equal(loaded.id, "abc")
   assert.deepEqual(toServer(loaded), stored.config)
+})
+
+test("matchesSearch searches what the list shows, word by word", () => {
+  const [site] = parseYaml(example) // example.com, 127.0.0.1:3000, /api on 3001
+  const yes = (q: string) => assert.ok(matchesSearch(site, q), q)
+  const no = (q: string) => assert.ok(!matchesSearch(site, q), q)
+  yes("")
+  yes("   ")
+  yes("EXAMPLE.com")
+  yes("http://127.0.0.1:3000")
+  yes("/api")
+  yes("127.0.0.1:3001") // the route's upstream, with the main route's host
+  yes("example 3001") // every word, in any order
+  yes("  3001   example ")
+  no("example 9999")
+  no("other.com")
+  no("https") // not a word of the site
+})
+
+test("matchesSearch finds raw sites by domain, certificate and text", () => {
+  const raw = {
+    ...newSite(),
+    raw: `server {
+  server_name raw.example.com;
+  ssl_certificate {{cert "Shop – wildcard"}};
+  proxy_pass http://10.0.0.9:8080;
+}
+`,
+  }
+  assert.ok(matchesSearch(raw, "raw.example.com"))
+  assert.ok(matchesSearch(raw, "shop wildcard"))
+  assert.ok(matchesSearch(raw, "10.0.0.9:8080"))
+  // The builder's settings, unused, do not count.
+  assert.ok(!matchesSearch(raw, "127.0.0.1"))
+})
+
+test("matchesSearch finds HTTPS sites by certificate", () => {
+  const site = {
+    ...newSite(),
+    serverName: "a.example.com",
+    https: true,
+    certName: "*.example.com",
+  }
+  assert.ok(matchesSearch(site, "*.example.com"))
+  assert.ok(!matchesSearch({ ...site, https: false }, "*.example.com"))
 })
 
 test("sameConfig compares what saving would store", () => {
