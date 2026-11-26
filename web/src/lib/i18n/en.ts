@@ -57,6 +57,7 @@ export const en = {
     domains: "Domains",
     upstream: "Upstream",
     noMainRoute: "Routes only",
+    raw: "Raw configuration",
     https: "HTTPS",
     status: "Status",
     actions: "Actions",
@@ -168,6 +169,12 @@ export const en = {
     applyFailed: "nginx rejected the configuration",
     applyFailedText: "Nothing was changed. nginx said:",
     saveFailed: "The site could not be saved",
+    mode: "Configuration",
+    modeBuilder: "Builder",
+    modeRaw: "Raw nginx config",
+    rawLabel: "nginx configuration",
+    rawHint:
+      'All that nginx gets for this site, such as server blocks, as written: HTTP redirects and ACME challenges included. Refer to certificates as {{cert "name"}} and {{key "name"}}, which follow renewals.',
   },
   certs: {
     title: "Certificates",
@@ -380,6 +387,15 @@ export const en = {
     invalid_key_type: (v: string) => `"${v}" is not a key type.`,
     cert_in_use: (v: string) =>
       `Used by ${v}. Choose another certificate for these sites first.`,
+    not_in_raw: () => "Sites with a raw configuration have no other settings.",
+    raw_unexpected: (v: string) => `Line ${v}: unexpected character.`,
+    raw_missing_semicolon: (v: string) => `Line ${v}: missing ";".`,
+    raw_unclosed_block: (v: string) =>
+      `Line ${v}: the block opened here is not closed.`,
+    raw_unterminated_quote: (v: string) =>
+      `Line ${v}: the quote is not closed.`,
+    raw_bad_ref: (v: string) =>
+      `${v} is not a reference such as {{cert "name"}} or {{key "name"}}.`,
   } as Record<string, (value: string) => string>,
 }
 

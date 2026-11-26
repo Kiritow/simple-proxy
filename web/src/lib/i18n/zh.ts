@@ -57,6 +57,7 @@ export const zh: Messages = {
     domains: "域名",
     upstream: "上游",
     noMainRoute: "仅路由",
+    raw: "原始配置",
     https: "HTTPS",
     status: "状态",
     actions: "操作",
@@ -160,6 +161,12 @@ export const zh: Messages = {
     applyFailed: "nginx 拒绝了这个配置",
     applyFailedText: "没有做任何修改。nginx 的输出：",
     saveFailed: "无法保存这个站点",
+    mode: "配置方式",
+    modeBuilder: "构建器",
+    modeRaw: "原始 nginx 配置",
+    rawLabel: "nginx 配置",
+    rawHint:
+      '这个站点在 nginx 中的全部配置（例如 server 块），按原样使用，HTTP 跳转和 ACME 验证也要自己写。用 {{cert "名称"}} 和 {{key "名称"}} 引用证书，续期后会自动更新。',
   },
   certs: {
     title: "证书",
@@ -358,5 +365,12 @@ export const zh: Messages = {
     beyond_ca: (v) => `CA 将于 ${v} 到期，早于这个证书。请缩短有效期。`,
     invalid_key_type: (v) => `“${v}”不是有效的密钥类型。`,
     cert_in_use: (v) => `${v} 正在使用它。请先为这些站点换一个证书。`,
+    not_in_raw: () => "使用原始配置的站点没有其他设置。",
+    raw_unexpected: (v) => `第 ${v} 行：意外的字符。`,
+    raw_missing_semicolon: (v) => `第 ${v} 行：缺少“;”。`,
+    raw_unclosed_block: (v) => `第 ${v} 行：这里开始的块没有闭合。`,
+    raw_unterminated_quote: (v) => `第 ${v} 行：引号没有闭合。`,
+    raw_bad_ref: (v) =>
+      `${v} 不是有效的引用，应为 {{cert "名称"}} 或 {{key "名称"}}。`,
   },
 }

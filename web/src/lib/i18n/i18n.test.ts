@@ -85,6 +85,12 @@ test("problem codes match those of the server", () => {
     "beyond_ca",
     "invalid_key_type",
     "cert_in_use",
+    "not_in_raw",
+    "raw_unexpected",
+    "raw_missing_semicolon",
+    "raw_unclosed_block",
+    "raw_unterminated_quote",
+    "raw_bad_ref",
   ]
   for (const [lang, messages] of Object.entries(languages)) {
     assert.deepEqual(

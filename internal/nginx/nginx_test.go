@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -148,6 +149,90 @@ servers:
 		t.Errorf("certificate looked up %d times, want 1", certs.lookups)
 	}
 }
+
+func TestRawServers(t *testing.T) {
+	cfg, err := config.Parse([]byte(`servers:
+- server_name: a.example.com
+  default: {port: 3000}
+- raw: |
+    server {
+      listen 443 ssl;
+      server_name b.example.com;
+      ssl_certificate     {{cert "*.example.com"}};
+      ssl_certificate_key {{key "*.example.com"}};
+      location / { return 204; }
+    }
+- enable: false
+  raw: "server { listen 81; }"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf, err := newGenerator(testCerts()).Generate(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `
+server {
+  listen 443 ssl;
+  server_name b.example.com;
+  ssl_certificate     "/acme/*.example.com_ecc/fullchain.cer";
+  ssl_certificate_key "/acme/*.example.com_ecc/*.example.com.key";
+  location / { return 204; }
+}
+`
+	if !strings.HasSuffix(string(conf), want) || strings.Contains(string(conf), "listen 81") {
+		t.Errorf("want the raw server, in order, with paths, and not the disabled one:\n%s", conf)
+	}
+
+	cfg.Servers[1].Raw = ptr(`ssl_certificate {{cert "missing"}};`)
+	_, err = newGenerator(testCerts()).Generate(t.Context(), cfg)
+	var fe *config.FieldError
+	if !errors.As(err, &fe) || fe.Field != "servers[1].raw" || !errors.Is(err, nginx.ErrCertNotFound) {
+		t.Errorf("a missing certificate: %v", err)
+	}
+}
+
+// TestRaw renders sites as raw configurations, which generate the same.
+func TestRaw(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "https.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen := newGenerator(testCerts())
+	gen.ACMEWebroot = "/var/www/acme"
+	want, err := gen.Generate(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := gen.Raw(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(raw, `ssl_certificate {{cert "*.example.com"}};`) || strings.HasPrefix(raw, "\n") {
+		t.Errorf("Raw = %s", raw)
+	}
+	rawCfg, err := config.Parse([]byte("servers:\n- raw: " + strconv.Quote(raw) + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := gen.Generate(t.Context(), rawCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// References cover certificates and keys, but not acme.sh's CA chains
+	// for OCSP stapling.
+	stapling := regexp.MustCompile(`(?m)^ *(ssl_trusted_certificate|ssl_stapling|ssl_stapling_verify) .*\n`)
+	if string(got) != stapling.ReplaceAllString(string(want), "") {
+		t.Errorf("as raw configuration:\n%s\nwant\n%s", got, want)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // TestLongServerNames: nginx refuses names too long for its hash buckets,
 // "could not build server_names_hash", unless they are made larger.

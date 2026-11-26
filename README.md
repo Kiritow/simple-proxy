@@ -6,6 +6,9 @@ forward them to), and saving applies it to nginx right away.
 
 - **Sites:** domains, upstream host and port, extra routes for path
   prefixes, WebSocket, buffering, caching, gzip and raw nginx directives.
+  Sites the builder cannot express, e.g. with regex locations, can be written
+  as raw nginx configuration instead, starting from what the builder
+  generates.
 - **HTTPS:** pick a certificate managed by acme.sh, or request a new one from
   the UI (HTTP-01 through nginx, or DNS-01 with an acme.sh DNS API). acme.sh
   renews certificates and reloads nginx. Certificates from other providers
@@ -207,6 +210,28 @@ HTTPS servers get a companion server on port 80 that redirects to HTTPS.
 Unknown fields are rejected, and all problems are reported at once. Options
 must be single directives: `;`, `{`, `}` and `#` have to be quoted or escaped.
 
+A site with `raw` is configured by that text alone, written by hand: nginx
+configuration for the `http` context, such as server blocks, generated as is.
+Only `enable` may be set besides it. Certificates are referred to by name, and
+their paths filled in, so that raw sites follow renewals and replacements:
+
+```yaml
+- raw: |
+    server {
+      listen 443 ssl;
+      server_name example.com;
+      ssl_certificate     {{cert "example.com"}};
+      ssl_certificate_key {{key "example.com"}};
+      location ~ ^/api/v[0-9]+/ { proxy_pass http://127.0.0.1:3001; }
+    }
+```
+
+simple-proxy checks blocks, quotes and references, finds the `server_name`s
+to report domains used by other sites, and leaves the rest to `nginx -t`.
+Raw sites get only what they contain: no redirect to HTTPS and no ACME
+challenges unless written in them, as the builder writes them when converting
+a site.
+
 When server names are too long for nginx's default
 `server_names_hash_bucket_size`, the configuration sets a larger one; it must
 then not be set elsewhere in nginx's configuration.
@@ -222,6 +247,7 @@ The console is built on this API, which scripts can use as well. A site's
 | `POST /api/sites`         | Add a site: `{"config": {...}}`. |
 | `PUT /api/sites/{id}`     | Change a site: `{"config": {...}, "generation": 1}`. |
 | `DELETE /api/sites/{id}`  | Remove a site: `?generation=1`. |
+| `POST /api/sites/raw` | The configuration the builder generates for a site, as raw configuration: `{"config": {...}}` gives `{"raw": "..."}`. |
 | `POST /api/sites/preview` | What saving a site would change, without saving it: `{"id": "...", "config": {...}}` (no `id` for a new site) gives `{"current": "...", "proposed": "...", "generation": 1}`. |
 | `PUT /api/sites`          | Replace all sites: `{"configs": [{...}]}`. |
 | `GET /api/status`         | How sites are applied to nginx, and the last error. |

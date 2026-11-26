@@ -3,12 +3,15 @@ import { readFileSync } from "node:fs"
 import { test } from "node:test"
 
 import {
-  certCovers,
-  fromStored,
   ImportError,
+  certCovers,
+  domainsOf,
+  fromStored,
   newRoute,
   newSite,
   parseYaml,
+  rawCertificates,
+  rawServerNames,
   resolveField,
   routeKey,
   serialize,
@@ -192,4 +195,36 @@ test("an incomplete site survives the round trip", () => {
   assert.equal(loaded.serverName, "")
   assert.equal(loaded.root.port, "")
   assert.equal(loaded.routes.length, 1)
+})
+
+test("raw sites serialize to their raw configuration only", () => {
+  const raw =
+    'server {\n  server_name a.example.com "b.example.com" _; # main\n  ssl_certificate {{cert "Shop \\"2026\\""}};\n}\n'
+  const site = {
+    ...newSite(),
+    serverName: "ignored.example.com",
+    raw,
+    enabled: false,
+  }
+  const { config } = serialize([site])
+  assert.deepEqual(config.servers[0], { enable: false, raw })
+  const [back] = parseYaml(toYaml([site]))
+  assert.equal(back.raw, raw)
+  assert.equal(back.enabled, false)
+  assert.deepEqual(domainsOf(back), ["a.example.com", "b.example.com"])
+  assert.deepEqual(rawCertificates(raw), ['Shop "2026"'])
+  // Builder sites have none.
+  assert.equal(
+    parseYaml("servers:\n- server_name: c.example.com\n")[0].raw,
+    null
+  )
+})
+
+test("rawServerNames skips comments and catch-alls", () => {
+  assert.deepEqual(
+    rawServerNames(
+      "# server_name old.example.com;\nserver{server_name _ x.example.com;}"
+    ),
+    ["x.example.com"]
+  )
 })

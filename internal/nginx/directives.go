@@ -1,5 +1,7 @@
 package nginx
 
+import "strings"
+
 // The directive sets below must never be appended to in place; copy them
 // first (as slices.Concat does).
 
@@ -53,8 +55,8 @@ var websocketDirectives = []directive{
 // stapling needs the CA chain, so it is only enabled if c names one.
 func tlsDirectives(c Certificate) []directive {
 	ds := []directive{
-		{"ssl_certificate", quote(c.Fullchain)},
-		{"ssl_certificate_key", quote(c.Key)},
+		{"ssl_certificate", quoteFile(c.Fullchain)},
+		{"ssl_certificate_key", quoteFile(c.Key)},
 	}
 	if c.CA != "" {
 		ds = append(ds, directive{"ssl_trusted_certificate", quote(c.CA)})
@@ -71,4 +73,13 @@ func tlsDirectives(c Certificate) []directive {
 		ds = append(ds, directive{"ssl_stapling", "on"}, directive{"ssl_stapling_verify", "on"})
 	}
 	return ds
+}
+
+// quoteFile quotes the path of a file, unless it is a reference to a
+// certificate, as in raw configurations, which is expanded to a quoted path.
+func quoteFile(path string) string {
+	if strings.HasPrefix(path, "{{") {
+		return path
+	}
+	return quote(path)
 }

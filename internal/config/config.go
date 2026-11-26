@@ -51,6 +51,11 @@ type Server struct {
 	Default Location `yaml:"default"`
 	// Locations are additional proxied path prefixes.
 	Locations []Location `yaml:"locations"`
+
+	// Raw, if set, is the raw configuration of the server, written by hand
+	// (see ParseRaw), in place of the configuration generated from the
+	// fields above, which must not be set then; only Enable applies.
+	Raw *string `yaml:"raw"`
 }
 
 // Enabled reports whether s should be generated.
@@ -202,6 +207,9 @@ func decode(data []byte, v any) error {
 func (c *Config) applyDefaults() {
 	for i := range c.Servers {
 		s := &c.Servers[i]
+		if s.Raw != nil {
+			continue
+		}
 		s.Default.Path = cmp.Or(s.Default.Path, "/")
 		s.Default.IP = cmp.Or(s.Default.IP, DefaultUpstreamIP)
 		for j := range s.Locations {
@@ -265,6 +273,14 @@ const (
 	// DomainInUse is not found by Parse, which sees one configuration, but
 	// by checks across sites.
 	DomainInUse ProblemCode = "domain_in_use"
+	// Problems with raw configurations. Their value is a line number,
+	// except for RawBadRef.
+	NotInRaw             ProblemCode = "not_in_raw"
+	RawUnexpected        ProblemCode = "raw_unexpected"
+	RawMissingSemicolon  ProblemCode = "raw_missing_semicolon"
+	RawUnclosedBlock     ProblemCode = "raw_unclosed_block"
+	RawUnterminatedQuote ProblemCode = "raw_unterminated_quote"
+	RawBadRef            ProblemCode = "raw_bad_ref"
 )
 
 var problemText = map[ProblemCode]string{
@@ -280,6 +296,13 @@ var problemText = map[ProblemCode]string{
 	TrailingBackslash: "ends with a backslash",
 	UnterminatedQuote: "has an unterminated quote",
 	DomainInUse:       "%q is used by another site",
+	NotInRaw:          "must not be set for a site with a raw configuration",
+
+	RawUnexpected:        "line %s: unexpected character",
+	RawMissingSemicolon:  "line %s: missing \";\"",
+	RawUnclosedBlock:     "line %s: the block opened here is not closed",
+	RawUnterminatedQuote: "line %s: the quote is not closed",
+	RawBadRef:            "%s is not a reference such as {{cert \"name\"}} or {{key \"name\"}}",
 }
 
 // Problem is a validation problem with a field. Value is the offending
@@ -311,6 +334,10 @@ func (c *Config) validate() error {
 }
 
 func (s Server) validate(p *FieldErrors, at string) {
+	if s.Raw != nil {
+		s.validateRaw(p, at)
+		return
+	}
 	names := strings.Fields(s.ServerName)
 	if len(names) == 0 {
 		p.add(at+".server_name", Required, "")
@@ -332,6 +359,39 @@ func (s Server) validate(p *FieldErrors, at string) {
 	for i, l := range s.Locations {
 		l.validate(p, fmt.Sprintf("%s.locations[%d]", at, i))
 	}
+}
+
+// validateRaw checks a server with a raw configuration.
+func (s Server) validateRaw(p *FieldErrors, at string) {
+	for _, f := range []struct {
+		name string
+		set  bool
+	}{
+		{"server_name", s.ServerName != ""},
+		{"listen_port", s.ListenPort != 0},
+		{"https", s.HTTPS != nil},
+		{"cert_name", s.CertName != ""},
+		{"gzip", s.Gzip},
+		{"options", s.Options != nil},
+		{"default", !s.Default.isZero()},
+		{"locations", s.Locations != nil},
+	} {
+		if f.set {
+			p.add(at+"."+f.name, NotInRaw, "")
+		}
+	}
+	if strings.TrimSpace(*s.Raw) == "" {
+		p.add(at+".raw", Required, "")
+		return
+	}
+	if _, problem := ParseRaw(*s.Raw); problem != nil {
+		*p = append(*p, &FieldError{Field: at + ".raw", Err: problem})
+	}
+}
+
+func (l Location) isZero() bool {
+	return l.Enable == nil && l.Path == "" && l.IP == "" && l.Port == 0 &&
+		!l.WebSocket && !l.DisableCache && !l.Realtime && l.Options == nil
 }
 
 func (l Location) validate(p *FieldErrors, at string) {

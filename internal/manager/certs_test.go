@@ -3,6 +3,7 @@ package manager_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,7 +35,7 @@ func problemOf(err error) (string, string) {
 	return fe.Field, ""
 }
 
-var certPath = regexp.MustCompile(`ssl_certificate "([^"]+/fullchain\.pem)"`)
+var certPath = regexp.MustCompile(`ssl_certificate\s+"([^"]+/fullchain\.pem)"`)
 
 // servedCert returns the path of the certificate file in the nginx
 // configuration.
@@ -353,5 +354,68 @@ func TestStartupRewritesFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Dir(e.servedCert(t))); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestRawSites(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	caCert, caKey := certstest.CA(t, "Root")
+	cert, key := certstest.Leaf(t, caCert, caKey, "*.example.com")
+	if _, err := e.m.UploadCertificate(ctx, manager.UploadRequest{Name: "Wildcard", Cert: cert, Key: key}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := e.m.CreateSite(ctx, site("b.example.com", 3000))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Raw sites take part in domain checks, by their server names.
+	raw := func(text string) json.RawMessage {
+		cfg, _ := json.Marshal(map[string]string{"raw": text})
+		return cfg
+	}
+	const text = `server {
+  listen 443 ssl;
+  server_name a.example.com;
+  ssl_certificate     {{cert "Wildcard"}};
+  ssl_certificate_key {{key "Wildcard"}};
+  location / { proxy_pass http://127.0.0.1:3000; }
+}
+`
+	_, err = e.m.CreateSite(ctx, raw(strings.Replace(text, "a.example.com", "B.example.com", 1)))
+	if got := fields(err); len(got) != 1 || got[0] != `servers[0].raw: "B.example.com" is used by another site` {
+		t.Errorf("a raw site with a domain in use: %v", err)
+	}
+	a, err := e.m.CreateSite(ctx, raw(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(e.nginxConf(t), `ssl_certificate     "`+e.servedCert(t)+`";`) {
+		t.Errorf("the reference was not replaced by the path:\n%s", e.nginxConf(t))
+	}
+	if _, err := e.m.UpdateSite(ctx, b.ID, 0, site("a.example.com", 3000)); len(fields(err)) != 1 {
+		t.Errorf("a builder site with a domain of a raw site: %v", err)
+	}
+
+	// Its certificate is in use, and references are checked.
+	if err := e.m.DeleteCertificate(ctx, "Wildcard"); !strings.Contains(fmt.Sprint(err), "is used by a.example.com") {
+		t.Errorf("deleting a certificate used by a raw site: %v", err)
+	}
+	_, err = e.m.UpdateSite(ctx, a.ID, 0, raw(`ssl_certificate {{cert "nope"}};`))
+	if got := fields(err); len(got) != 1 || !strings.HasPrefix(got[0], "servers[0].raw: certificate not found") {
+		t.Errorf("a reference to a missing certificate: %v", err)
+	}
+
+	// Builder sites convert to raw configurations, which generate the same.
+	converted, err := e.m.RawConfig(ctx, json.RawMessage(`{"server_name": "c.example.com", "https": true, "cert_name": "Wildcard", "enable": false, "default": {"port": 4000}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(converted, `ssl_certificate {{cert "Wildcard"}};`) || !strings.Contains(converted, "proxy_pass http://127.0.0.1:4000;") {
+		t.Errorf("RawConfig = %s", converted)
+	}
+	if _, err := e.m.CreateSite(ctx, raw(converted)); err != nil {
+		t.Errorf("storing the converted site: %v", err)
 	}
 }

@@ -59,6 +59,10 @@ type Generator struct {
 	// Now returns the generation time written in the output. It defaults to
 	// time.Now.
 	Now func() time.Time
+
+	// refs makes servers refer to certificates by name, as raw
+	// configurations do, rather than by path.
+	refs bool
 }
 
 //go:embed nginx.conf.tmpl
@@ -107,7 +111,9 @@ type confData struct {
 	Servers                   []server
 }
 
+// server is a server block, or the raw configuration of a server.
 type server struct {
+	Raw        string
 	Listen     string
 	Name       string
 	Directives []directive
@@ -133,21 +139,43 @@ func (g *Generator) servers(ctx context.Context, cfg *config.Config) ([]server, 
 	// Servers often share a wildcard certificate, and lookups may be slow.
 	certs := make(map[string]Certificate)
 
+	locate := func(name string) (Certificate, error) {
+		cert, ok := certs[name]
+		if !ok {
+			var err error
+			if cert, err = g.locateCert(ctx, name); err != nil {
+				return Certificate{}, err
+			}
+			certs[name] = cert
+		}
+		return cert, nil
+	}
+
 	for i, s := range cfg.Servers {
 		if !s.Enabled() {
 			continue
 		}
+		if s.Raw != nil {
+			raw, err := expandRefs(*s.Raw, locate)
+			if err != nil {
+				return nil, &config.FieldError{Field: fmt.Sprintf("servers[%d].raw", i), Err: err}
+			}
+			out = append(out, server{Raw: raw})
+			continue
+		}
 
 		srv := server{Listen: strconv.Itoa(s.Port()), Name: s.ServerName}
-		if s.UseHTTPS() {
+		if s.UseHTTPS() && g.refs {
 			name := s.Certificate()
-			cert, ok := certs[name]
-			if !ok {
-				var err error
-				if cert, err = g.locateCert(ctx, name); err != nil {
-					return nil, &config.FieldError{Field: fmt.Sprintf("servers[%d].cert_name", i), Err: err}
-				}
-				certs[name] = cert
+			srv.Listen += " ssl"
+			srv.Directives = append(srv.Directives, tlsDirectives(Certificate{
+				Fullchain: config.RawCertRef(name, false),
+				Key:       config.RawCertRef(name, true),
+			})...)
+		} else if s.UseHTTPS() {
+			cert, err := locate(s.Certificate())
+			if err != nil {
+				return nil, &config.FieldError{Field: fmt.Sprintf("servers[%d].cert_name", i), Err: err}
 			}
 			srv.Listen += " ssl"
 			srv.Directives = append(srv.Directives, tlsDirectives(cert)...)
@@ -177,6 +205,50 @@ func (g *Generator) servers(ctx context.Context, cfg *config.Config) ([]server, 
 	return out, nil
 }
 
+// Raw returns the server blocks of cfg, which must have been returned by
+// config.Parse, as the raw configuration of a site, without the catch-all
+// servers: certificates are referred to by name rather than located, so
+// OCSP stapling, which needs acme.sh's CA chains, is left out.
+func (g *Generator) Raw(ctx context.Context, cfg *config.Config) (string, error) {
+	gen := *g
+	gen.refs = true
+	servers, err := gen.servers(ctx, cfg)
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	if err := confTemplate.ExecuteTemplate(&buf, "servers", servers); err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(buf.String(), "\n") + "\n", nil
+}
+
+// expandRefs replaces the references to certificates in a raw
+// configuration with the quoted paths of their files.
+func expandRefs(raw string, locate func(name string) (Certificate, error)) (string, error) {
+	info, problem := config.ParseRaw(raw)
+	if problem != nil {
+		return "", problem
+	}
+	var b strings.Builder
+	last := 0
+	for _, ref := range info.Refs {
+		cert, err := locate(ref.Name)
+		if err != nil {
+			return "", err
+		}
+		path := cert.Fullchain
+		if ref.Kind == "key" {
+			path = cert.Key
+		}
+		b.WriteString(raw[last:ref.Start])
+		b.WriteString(quote(path))
+		last = ref.End
+	}
+	b.WriteString(raw[last:])
+	return strings.TrimRight(b.String(), " \t\r\n"), nil
+}
+
 // defaultBucketSize is nginx's server_names_hash_bucket_size on most CPUs.
 const defaultBucketSize = 64
 
@@ -188,7 +260,7 @@ func bucketSize(cfg *config.Config) int {
 	longest := 0
 	for _, s := range cfg.Servers {
 		if s.Enabled() {
-			for _, name := range strings.Fields(s.ServerName) {
+			for _, name := range s.Names() {
 				longest = max(longest, len(name))
 			}
 		}

@@ -313,8 +313,7 @@ func (m *Manager) ReplaceSites(ctx context.Context, configs []json.RawMessage) (
 		}
 		var errs config.FieldErrors
 		for i, server := range cfg.Servers {
-			field := fmt.Sprintf("servers[%d].server_name", i)
-			errs = append(errs, domainConflicts(server, sites[:i], field)...)
+			errs = append(errs, domainConflicts(server, sites[:i], fmt.Sprintf("servers[%d]", i))...)
 		}
 		if len(errs) > 0 {
 			return errs
@@ -465,6 +464,24 @@ func (m *Manager) NginxConfig(ctx context.Context) ([]byte, error) {
 	return m.renderAt(ctx, st, time.Now())
 }
 
+// RawConfig returns the raw configuration of a site, one entry of servers in
+// JSON: the configuration generated for it, to be edited by hand, with
+// references to its certificate. Problems are reported like for
+// CreateSite.
+func (m *Manager) RawConfig(ctx context.Context, cfg json.RawMessage) (string, error) {
+	parsed, err := parse([]store.Site{{Config: cfg}})
+	if err != nil {
+		return "", err
+	}
+	server := parsed.Servers[0]
+	if server.Raw != nil {
+		return *server.Raw, nil
+	}
+	server.Enable = nil // the configuration it would have when enabled
+	parsed.Servers[0] = server
+	return m.opts.Generator.Raw(ctx, parsed)
+}
+
 // Generate generates the configuration of cfg, which is not stored, with
 // the certificates that are.
 func (m *Manager) Generate(ctx context.Context, cfg *config.Config) ([]byte, error) {
@@ -539,7 +556,7 @@ func (m *Manager) checkSite(ctx context.Context, site store.Site, others []store
 	if !server.Enabled() {
 		return nil // disabled sites may be incomplete in other ways
 	}
-	if errs := domainConflicts(server, others, "servers[0].server_name"); len(errs) > 0 {
+	if errs := domainConflicts(server, others, "servers[0]"); len(errs) > 0 {
 		return errs
 	}
 	// Generating the site alone finds missing certificates, reported for
@@ -548,11 +565,15 @@ func (m *Manager) checkSite(ctx context.Context, site store.Site, others []store
 	return err
 }
 
-// domainConflicts reports the domains of server that enabled other sites
-// use.
-func domainConflicts(server config.Server, others []store.Site, field string) config.FieldErrors {
+// domainConflicts reports the domains of server, at the given path such as
+// "servers[0]", that enabled other sites use.
+func domainConflicts(server config.Server, others []store.Site, at string) config.FieldErrors {
 	if !server.Enabled() {
 		return nil
+	}
+	field := at + ".server_name"
+	if server.Raw != nil {
+		field = at + ".raw"
 	}
 	taken := map[string]bool{}
 	for _, other := range others {
@@ -560,12 +581,12 @@ func domainConflicts(server config.Server, others []store.Site, field string) co
 		if err != nil || !s.Enabled() {
 			continue
 		}
-		for _, name := range strings.Fields(s.ServerName) {
+		for _, name := range s.Names() {
 			taken[strings.ToLower(name)] = true
 		}
 	}
 	var errs config.FieldErrors
-	for _, name := range strings.Fields(server.ServerName) {
+	for _, name := range server.Names() {
 		if taken[strings.ToLower(name)] {
 			problem := &config.Problem{Code: config.DomainInUse, Value: name}
 			errs = append(errs, &config.FieldError{Field: field, Err: problem})

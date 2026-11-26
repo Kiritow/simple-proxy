@@ -50,6 +50,7 @@ type Options struct {
 //	PUT    /api/sites/{id}     change a site: {"config": {...}, "generation": 1}
 //	DELETE /api/sites/{id}     remove a site; ?generation=1
 //	POST   /api/sites/preview  what saving a site would change: {"id": "...", "config": {...}}
+//	POST   /api/sites/raw      the site as a raw configuration: {"config": {...}} gives {"raw": "..."}
 //	GET    /api/status        how configuration is applied to nginx
 //	POST   /api/apply         apply the stored sites again
 //	GET    /api/nginx.conf    the configuration generated from the sites
@@ -119,6 +120,7 @@ func NewHandler(opts Options) http.Handler {
 	mux.HandleFunc("POST /api/sites", h.createSite)
 	mux.HandleFunc("PUT /api/sites", h.replaceSites)
 	mux.HandleFunc("POST /api/sites/preview", h.previewSite)
+	mux.HandleFunc("POST /api/sites/raw", h.rawSite)
 	mux.HandleFunc("PUT /api/sites/{id}", h.updateSite)
 	mux.HandleFunc("DELETE /api/sites/{id}", h.deleteSite)
 	mux.HandleFunc("GET /api/status", h.status)
@@ -228,6 +230,19 @@ func (h *handler) previewSite(w http.ResponseWriter, r *http.Request) {
 		"proposed":   string(p.Proposed),
 		"generation": p.Generation,
 	})
+}
+
+func (h *handler) rawSite(w http.ResponseWriter, r *http.Request) {
+	var req siteRequest
+	if !decodeJSON(w, r, &req) || !checkObject(w, req.Config) {
+		return
+	}
+	raw, err := h.m.RawConfig(r.Context(), req.Config)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"raw": raw})
 }
 
 func (h *handler) deleteSite(w http.ResponseWriter, r *http.Request) {

@@ -445,16 +445,19 @@ func (m *Manager) DeleteCertificate(ctx context.Context, name string) error {
 }
 
 // usersOf returns the first domains of the enabled sites using the
-// certificate of the given name.
+// certificate of the given name, or "raw configuration" for raw sites
+// without one.
 func usersOf(sites []store.Site, cert string) []string {
 	var users []string
 	for _, site := range sites {
 		s, err := config.DecodeServer(site.Config)
-		if err != nil || !s.Enabled() || !s.UseHTTPS() || s.Certificate() != cert {
+		if err != nil || !s.Enabled() || !s.UsesCert(cert) {
 			continue
 		}
-		if names := strings.Fields(s.ServerName); len(names) > 0 {
+		if names := s.Names(); len(names) > 0 {
 			users = append(users, names[0])
+		} else {
+			users = append(users, "raw configuration")
 		}
 	}
 	return users

@@ -59,6 +59,7 @@ import type { Resource } from "@/lib/hooks"
 import { describeProblem, useI18n } from "@/lib/i18n"
 import {
   certificateOf,
+  rawCertificates,
   DEFAULT_HOST,
   domainsOf,
   fromStored,
@@ -287,7 +288,17 @@ export function SitesPage({
             <TableBody>
               {shown.map(({ stored, site }) => {
                 const domains = domainsOf(site)
-                const name = nameOf(site, t.sites.newSite)
+                const name = nameOf(
+                  site,
+                  site.raw !== null ? t.sites.raw : t.sites.newSite
+                )
+                // The certificates it serves.
+                const certs =
+                  site.raw !== null
+                    ? rawCertificates(site.raw)
+                    : site.https
+                      ? [certificateOf(site)]
+                      : []
                 return (
                   <TableRow
                     key={stored.id}
@@ -296,7 +307,7 @@ export function SitesPage({
                   >
                     <TableCell className="pl-4">
                       <div className="flex items-center gap-2 font-medium">
-                        {site.https && (
+                        {certs.length > 0 && (
                           <Lock
                             className="size-3.5 text-emerald-600 md:hidden dark:text-emerald-400"
                             aria-label={t.sites.https}
@@ -323,7 +334,9 @@ export function SitesPage({
                       )}
                     </TableCell>
                     <TableCell className="max-md:hidden">
-                      {site.root.enabled ? (
+                      {site.raw !== null ? (
+                        <Badge variant="outline">{t.sites.raw}</Badge>
+                      ) : site.root.enabled ? (
                         <div className="font-mono text-xs">
                           {upstreamOf(site)}
                         </div>
@@ -332,17 +345,17 @@ export function SitesPage({
                           {t.sites.noMainRoute}
                         </div>
                       )}
-                      {site.routes.length > 0 && (
+                      {site.raw === null && site.routes.length > 0 && (
                         <div className="text-xs text-muted-foreground">
                           {t.sites.routeCount(site.routes.length)}
                         </div>
                       )}
                     </TableCell>
                     <TableCell className="max-md:hidden">
-                      {site.https ? (
-                        <span className="flex items-center gap-1.5 font-mono text-xs">
+                      {certs.length > 0 ? (
+                        <span className="flex items-center gap-1.5 text-xs">
                           <Lock className="size-3.5 text-emerald-600 dark:text-emerald-400" />
-                          {certificateOf(site)}
+                          {certs.join(", ")}
                         </span>
                       ) : (
                         <span className="text-xs text-muted-foreground">

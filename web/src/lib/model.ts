@@ -28,6 +28,9 @@ export type Site = {
   options: Directive[]
   root: Route // the default location; its upstream is inherited by routes
   routes: Route[]
+  // raw is the raw nginx configuration of the site, written by hand in
+  // place of the builder's fields, or null for sites built from them.
+  raw: string | null
 }
 
 export const DEFAULT_HOST = "127.0.0.1"
@@ -61,10 +64,43 @@ export function newSite(): Site {
     options: [],
     root: newRoute("/"),
     routes: [],
+    raw: null,
   }
 }
 
-export const domainsOf = (s: Site) => s.serverName.split(/\s+/).filter(Boolean)
+export const domainsOf = (s: Site) =>
+  s.raw !== null
+    ? rawServerNames(s.raw)
+    : s.serverName.split(/\s+/).filter(Boolean)
+
+// rawServerNames returns the names in the server_name directives of a raw
+// configuration, roughly: the server parses it properly.
+export function rawServerNames(raw: string): string[] {
+  const text = raw.replace(/#[^\n]*/g, "")
+  const names: string[] = []
+  for (const m of text.matchAll(/(?:^|[\s;{}])server_name\s+([^;{}]*);/g)) {
+    for (const word of m[1].split(/\s+/)) {
+      const name = word.replace(/^(["'])(.*)\1$/, "$2")
+      if (name && name !== "_" && !names.includes(name)) names.push(name)
+    }
+  }
+  return names
+}
+
+// rawCertificates returns the names of the certificates a raw configuration
+// refers to, as {{cert "name"}}.
+export function rawCertificates(raw: string): string[] {
+  const names: string[] = []
+  for (const m of raw.matchAll(/\{\{\s*cert\s+("(?:[^"\\]|\\.)*")\s*\}\}/g)) {
+    try {
+      const name = JSON.parse(m[1]) as string
+      if (!names.includes(name)) names.push(name)
+    } catch {
+      // Not a valid reference; the server reports it.
+    }
+  }
+  return names
+}
 
 // certificateOf returns the name of the certificate served by s.
 export const certificateOf = (s: Site) => s.certName || domainsOf(s)[0] || ""
@@ -107,15 +143,16 @@ type LocationJSON = {
 }
 
 export type ServerJSON = {
-  server_name: string
+  server_name?: string
   enable?: false
   listen_port?: number
   https?: true
   cert_name?: string
   gzip?: true
   options?: string[]
-  default: LocationJSON
+  default?: LocationJSON
   locations?: LocationJSON[]
+  raw?: string
 }
 
 export type ConfigJSON = { servers: ServerJSON[] }
@@ -158,6 +195,12 @@ export function serialize(sites: Site[]): Serialized {
   const servers = sites.map((site, i): ServerJSON => {
     const at = `servers[${i}]`
     owners.set(at, siteKey(site))
+    if (site.raw !== null) {
+      return compact({
+        enable: site.enabled ? undefined : false,
+        raw: site.raw,
+      })
+    }
     return compact({
       server_name: domainsOf(site).join(" "),
       enable: site.enabled ? undefined : false,
@@ -227,6 +270,7 @@ const serverFields = new Set([
   "options",
   "default",
   "locations",
+  "raw",
 ])
 
 const locationFields = new Set([
@@ -337,6 +381,7 @@ function sitesFromConfig(doc: unknown): Site[] {
       routes: list(s.locations, `${at}.locations`).map((l, j) =>
         route(l, `${at}.locations[${j}]`)
       ),
+      raw: s.raw == null ? null : str(s.raw),
     }
   })
   if (problems.length > 0) throw new ImportError(problems)

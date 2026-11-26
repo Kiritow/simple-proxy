@@ -30,7 +30,12 @@ server {
   ssl_certificate_key {{ .FallbackKey }};
   return 444;
 }
-{{- range .Servers }}
+{{- template "servers" .Servers }}
+{{- define "servers" }}
+{{- range . }}
+{{- if .Raw }}
+{{ .Raw }}
+{{- else }}
 server {
   listen {{ .Listen }};
   server_name {{ .Name }};
@@ -45,4 +50,6 @@ server {
   }
   {{- end }}
 }
+{{- end }}
+{{- end }}
 {{- end }}

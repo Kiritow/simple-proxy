@@ -196,6 +196,13 @@ export const api = {
       json: { id: id ?? "", config },
       signal,
     }),
+  // rawSite returns the configuration generated for a site, as a raw
+  // configuration to edit by hand.
+  rawSite: (config: ServerJSON) =>
+    request<{ raw: string }>("api/sites/raw", {
+      method: "POST",
+      json: { config },
+    }).then((r) => r.raw),
   replaceSites: (configs: ServerJSON[]) =>
     request<{ sites: StoredSite[] }>("api/sites", {
       method: "PUT",

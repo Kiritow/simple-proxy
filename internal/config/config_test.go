@@ -3,6 +3,7 @@ package config_test
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -316,5 +317,80 @@ func TestCertNames(t *testing.T) {
 	// Descriptive names are only used to find certificates.
 	if _, err := config.Parse([]byte("servers:\n- server_name: a.example.com\n  cert_name: 'Shop {wildcard}; 2026'\n  default: {port: 1}\n")); err != nil {
 		t.Errorf("a descriptive cert_name was rejected: %v", err)
+	}
+}
+
+func TestRaw(t *testing.T) {
+	const raw = `# Hand-written.
+server {
+  listen 443 ssl;
+  server_name a.example.com "b.example.com" _;
+  ssl_certificate     {{cert "Shop – wildcard"}};
+  ssl_certificate_key {{key "Shop – wildcard"}};
+  location ~ "^/x/[a-z]{2}$" {
+    proxy_pass http://${upstream}:8080;   # variables may use braces
+    return 200 'a } b';
+  }
+}
+upstream backend { server 10.0.0.1:80; }
+`
+	info, problem := config.ParseRaw(raw)
+	if problem != nil {
+		t.Fatal(problem)
+	}
+	if !slices.Equal(info.ServerNames, []string{"a.example.com", "b.example.com"}) {
+		t.Errorf("ServerNames = %q", info.ServerNames)
+	}
+	if len(info.Refs) != 2 || info.Refs[0].Kind != "cert" || info.Refs[1].Name != "Shop – wildcard" ||
+		raw[info.Refs[0].Start:info.Refs[0].End] != `{{cert "Shop – wildcard"}}` {
+		t.Errorf("Refs = %+v", info.Refs)
+	}
+
+	for _, tc := range []struct {
+		raw  string
+		code config.ProblemCode
+		line string
+	}{
+		{"server {\n  listen 80;\n", config.RawUnclosedBlock, "1"},
+		{"server {\n  listen 80\n}\n", config.RawMissingSemicolon, "3"},
+		{"server {}\n}\n", config.RawUnexpected, "2"},
+		{"server {\n  return 200 'x;\n}\n", config.RawUnterminatedQuote, "2"},
+		{"ssl_certificate {{cert name}};", config.RawBadRef, `{{cert name}}`},
+		{"listen 80", config.RawMissingSemicolon, "1"},
+	} {
+		_, problem := config.ParseRaw(tc.raw)
+		if problem == nil || problem.Code != tc.code || problem.Value != tc.line {
+			t.Errorf("ParseRaw(%q) = %v, want %s at %s", tc.raw, problem, tc.code, tc.line)
+		}
+	}
+}
+
+func TestRawServers(t *testing.T) {
+	cfg, err := config.Parse([]byte("servers:\n- raw: |\n    server { listen 80; server_name a.example.com; }\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.Servers[0]
+	if s.Default.Path != "" || !slices.Equal(s.Names(), []string{"a.example.com"}) {
+		t.Errorf("raw server %+v with names %v, want no defaults", s, s.Names())
+	}
+
+	_, err = config.Parse([]byte("servers:\n- server_name: a.example.com\n  gzip: true\n  default: {port: 1}\n  raw: \"\"\n"))
+	var errs config.FieldErrors
+	if !errors.As(err, &errs) {
+		t.Fatalf("Parse error = %v", err)
+	}
+	var got []string
+	for _, fe := range errs {
+		got = append(got, fe.Error())
+	}
+	want := []string{
+		"servers[0].server_name: must not be set for a site with a raw configuration",
+		"servers[0].gzip: must not be set for a site with a raw configuration",
+		"servers[0].default: must not be set for a site with a raw configuration",
+		"servers[0].raw: is required",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("problems\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

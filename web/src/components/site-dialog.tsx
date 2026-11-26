@@ -11,6 +11,7 @@ import {
   Output,
   TextField,
   ToggleCard,
+  useDescribe,
 } from "@/components/form"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -31,14 +32,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { FieldDescription, FieldGroup } from "@/components/ui/field"
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
 import {
   api,
   errorOf,
   type ApiError,
+  type FieldProblem,
   type CertificateList,
   type Status,
   type StoredSite,
@@ -181,6 +190,31 @@ export function SiteDialog({
       routes: s.routes.map((r) => (r.id === id ? { ...r, ...p } : r)),
     }))
 
+  // Switching to raw mode starts from the configuration the builder
+  // generates; switching back keeps the raw configuration for another
+  // switch until the dialog closes.
+  const [lastRaw, setLastRaw] = useState<string | null>(null)
+  const [converting, setConverting] = useState(false)
+  const toRaw = async () => {
+    if (site.raw !== null || converting) return
+    let raw = lastRaw
+    if (raw === null) {
+      setConverting(true)
+      try {
+        raw = await api.rawSite(toServer(site))
+      } catch {
+        raw = rawTemplate(domainsOf(site))
+      }
+      setConverting(false)
+    }
+    patch({ raw })
+  }
+  const toBuilder = () => {
+    if (site.raw === null) return
+    setLastRaw(site.raw)
+    patch({ raw: null })
+  }
+
   const key = siteKey(site)
   const root = routeKey(site, site.root)
   const name = domainsOf(site)[0] ?? t.sites.newSite
@@ -263,159 +297,198 @@ export function SiteDialog({
               )
             )}
             {failure && <SaveFailure error={failure.error} />}
-            <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-              <TabsList className="w-full">
-                {tabs.map((tab) => (
-                  <TabsTrigger key={tab} value={tab} className="gap-1.5">
-                    {t.site[tab]}
-                    {counts[tab] > 0 && (
-                      <span className="size-1.5 rounded-full bg-destructive" />
-                    )}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
+            <div
+              role="group"
+              aria-label={t.site.mode}
+              className="inline-flex w-fit gap-0.5 rounded-lg border p-0.5"
+            >
+              <Button
+                size="sm"
+                variant={site.raw === null ? "secondary" : "ghost"}
+                aria-pressed={site.raw === null}
+                onClick={toBuilder}
+              >
+                {t.site.modeBuilder}
+              </Button>
+              <Button
+                size="sm"
+                variant={site.raw !== null ? "secondary" : "ghost"}
+                aria-pressed={site.raw !== null}
+                onClick={() => void toRaw()}
+                disabled={converting}
+              >
+                {converting && <Spinner />}
+                {t.site.modeRaw}
+              </Button>
+            </div>
+            {site.raw !== null ? (
+              <RawEditor
+                id={`${key}.raw`}
+                value={site.raw}
+                onChange={(raw) => patch({ raw })}
+                error={problems.byKey.get(`${key}.raw`)}
+                enabled={site.enabled}
+                onEnabledChange={(enabled) => patch({ enabled })}
+                enabledId={`${key}.enabled`}
+              />
+            ) : (
+              <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+                <TabsList className="w-full">
+                  {tabs.map((tab) => (
+                    <TabsTrigger key={tab} value={tab} className="gap-1.5">
+                      {t.site[tab]}
+                      {counts[tab] > 0 && (
+                        <span className="size-1.5 rounded-full bg-destructive" />
+                      )}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
 
-              <TabsContent value="details" className="pt-3">
-                <FieldGroup>
-                  <TextField
-                    id={`${key}.server_name`}
-                    label={t.site.domains}
-                    placeholder="example.com www.example.com"
-                    description={t.site.domainsHint}
-                    value={site.serverName}
-                    onChange={(e) => patch({ serverName: e.target.value })}
-                    error={problems.byKey.get(`${key}.server_name`)}
-                    autoFocus={!stored}
-                  />
-                  <MainRouteCard
-                    site={site}
-                    problems={problems}
-                    onChange={patchRoot}
-                  />
-                  <ToggleCard
-                    id={`${key}.enabled`}
-                    title={t.site.enabled}
-                    description={t.site.enabledText}
-                    checked={site.enabled}
-                    onCheckedChange={(enabled) => patch({ enabled })}
-                  />
-                </FieldGroup>
-              </TabsContent>
-
-              <TabsContent value="routes" className="flex flex-col gap-3 pt-3">
-                <FieldDescription>{t.site.routesText}</FieldDescription>
-                {site.routes.map((route) => (
-                  <RouteCard
-                    key={route.id}
-                    site={site}
-                    route={route}
-                    problems={problems}
-                    onChange={(p) => patchRoute(route.id, p)}
-                    onRemove={() =>
-                      change((s) => ({
-                        ...s,
-                        routes: s.routes.filter((r) => r.id !== route.id),
-                      }))
-                    }
-                  />
-                ))}
-                {site.routes.length === 0 && (
-                  <p className="py-4 text-center text-sm text-muted-foreground">
-                    {t.site.noRoutes}
-                  </p>
-                )}
-                <Button
-                  variant="outline"
-                  className="w-fit"
-                  onClick={() => {
-                    const route = newRoute()
-                    change((s) => ({ ...s, routes: [...s.routes, route] }))
-                    setFocusRequest({ key: `${routeKey(site, route)}.path` })
-                  }}
-                >
-                  <Plus />
-                  {t.site.addRoute}
-                </Button>
-              </TabsContent>
-
-              <TabsContent value="https" className="pt-3">
-                <FieldGroup>
-                  <ToggleCard
-                    id={`${key}.https`}
-                    title={t.site.httpsTitle}
-                    description={t.site.httpsText}
-                    checked={site.https}
-                    onCheckedChange={(https) => patch({ https })}
-                  />
-                  {site.https && (
-                    <CertificateField
+                <TabsContent value="details" className="pt-3">
+                  <FieldGroup>
+                    <TextField
+                      id={`${key}.server_name`}
+                      label={t.site.domains}
+                      placeholder="example.com www.example.com"
+                      description={t.site.domainsHint}
+                      value={site.serverName}
+                      onChange={(e) => patch({ serverName: e.target.value })}
+                      error={problems.byKey.get(`${key}.server_name`)}
+                      autoFocus={!stored}
+                    />
+                    <MainRouteCard
                       site={site}
-                      certs={certs}
-                      error={problems.byKey.get(`${key}.cert_name`)}
-                      onChange={(certName) => patch({ certName })}
-                      onRequest={
-                        status?.acme
-                          ? () => setIssuing({ key: Date.now() })
-                          : undefined
+                      problems={problems}
+                      onChange={patchRoot}
+                    />
+                    <ToggleCard
+                      id={`${key}.enabled`}
+                      title={t.site.enabled}
+                      description={t.site.enabledText}
+                      checked={site.enabled}
+                      onCheckedChange={(enabled) => patch({ enabled })}
+                    />
+                  </FieldGroup>
+                </TabsContent>
+
+                <TabsContent
+                  value="routes"
+                  className="flex flex-col gap-3 pt-3"
+                >
+                  <FieldDescription>{t.site.routesText}</FieldDescription>
+                  {site.routes.map((route) => (
+                    <RouteCard
+                      key={route.id}
+                      site={site}
+                      route={route}
+                      problems={problems}
+                      onChange={(p) => patchRoute(route.id, p)}
+                      onRemove={() =>
+                        change((s) => ({
+                          ...s,
+                          routes: s.routes.filter((r) => r.id !== route.id),
+                        }))
                       }
                     />
+                  ))}
+                  {site.routes.length === 0 && (
+                    <p className="py-4 text-center text-sm text-muted-foreground">
+                      {t.site.noRoutes}
+                    </p>
                   )}
-                </FieldGroup>
-              </TabsContent>
+                  <Button
+                    variant="outline"
+                    className="w-fit"
+                    onClick={() => {
+                      const route = newRoute()
+                      change((s) => ({ ...s, routes: [...s.routes, route] }))
+                      setFocusRequest({ key: `${routeKey(site, route)}.path` })
+                    }}
+                  >
+                    <Plus />
+                    {t.site.addRoute}
+                  </Button>
+                </TabsContent>
 
-              <TabsContent value="advanced" className="pt-3">
-                <FieldGroup>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <TextField
-                      id={`${key}.listen_port`}
-                      label={t.site.listenPort}
-                      type="number"
-                      min={1}
-                      max={65535}
-                      placeholder={site.https ? "443" : "80"}
-                      value={site.listenPort}
-                      onChange={(e) => patch({ listenPort: e.target.value })}
-                      error={problems.byKey.get(`${key}.listen_port`)}
+                <TabsContent value="https" className="pt-3">
+                  <FieldGroup>
+                    <ToggleCard
+                      id={`${key}.https`}
+                      title={t.site.httpsTitle}
+                      description={t.site.httpsText}
+                      checked={site.https}
+                      onCheckedChange={(https) => patch({ https })}
                     />
-                    <TextField
-                      id={`${root}.path`}
-                      label={t.site.defaultPath}
-                      description={t.site.defaultPathHint}
-                      placeholder="/"
-                      className="[&_input]:font-mono"
-                      value={site.root.path}
-                      onChange={(e) => patchRoot({ path: e.target.value })}
-                      error={problems.byKey.get(`${root}.path`)}
+                    {site.https && (
+                      <CertificateField
+                        site={site}
+                        certs={certs}
+                        error={problems.byKey.get(`${key}.cert_name`)}
+                        onChange={(certName) => patch({ certName })}
+                        onRequest={
+                          status?.acme
+                            ? () => setIssuing({ key: Date.now() })
+                            : undefined
+                        }
+                      />
+                    )}
+                  </FieldGroup>
+                </TabsContent>
+
+                <TabsContent value="advanced" className="pt-3">
+                  <FieldGroup>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <TextField
+                        id={`${key}.listen_port`}
+                        label={t.site.listenPort}
+                        type="number"
+                        min={1}
+                        max={65535}
+                        placeholder={site.https ? "443" : "80"}
+                        value={site.listenPort}
+                        onChange={(e) => patch({ listenPort: e.target.value })}
+                        error={problems.byKey.get(`${key}.listen_port`)}
+                      />
+                      <TextField
+                        id={`${root}.path`}
+                        label={t.site.defaultPath}
+                        description={t.site.defaultPathHint}
+                        placeholder="/"
+                        className="[&_input]:font-mono"
+                        value={site.root.path}
+                        onChange={(e) => patchRoot({ path: e.target.value })}
+                        error={problems.byKey.get(`${root}.path`)}
+                      />
+                    </div>
+                    <ToggleCard
+                      id={`${key}.gzip`}
+                      title={t.site.gzip}
+                      description={t.site.gzipText}
+                      checked={site.gzip}
+                      onCheckedChange={(gzip) => patch({ gzip })}
                     />
-                  </div>
-                  <ToggleCard
-                    id={`${key}.gzip`}
-                    title={t.site.gzip}
-                    description={t.site.gzipText}
-                    checked={site.gzip}
-                    onCheckedChange={(gzip) => patch({ gzip })}
-                  />
-                  <DirectiveList
-                    owner={key}
-                    title={t.site.serverDirectives}
-                    description={t.site.serverDirectivesText}
-                    items={site.options}
-                    onChange={(options) => patch({ options })}
-                    problems={problems}
-                    placeholder="client_max_body_size 64m"
-                  />
-                  <DirectiveList
-                    owner={root}
-                    title={t.site.routeDirectives}
-                    description={t.site.routeDirectivesText}
-                    items={site.root.options}
-                    onChange={(options) => patchRoot({ options })}
-                    problems={problems}
-                    placeholder="proxy_read_timeout 300s"
-                  />
-                </FieldGroup>
-              </TabsContent>
-            </Tabs>
+                    <DirectiveList
+                      owner={key}
+                      title={t.site.serverDirectives}
+                      description={t.site.serverDirectivesText}
+                      items={site.options}
+                      onChange={(options) => patch({ options })}
+                      problems={problems}
+                      placeholder="client_max_body_size 64m"
+                    />
+                    <DirectiveList
+                      owner={root}
+                      title={t.site.routeDirectives}
+                      description={t.site.routeDirectivesText}
+                      items={site.root.options}
+                      onChange={(options) => patchRoot({ options })}
+                      problems={problems}
+                      placeholder="proxy_read_timeout 300s"
+                    />
+                  </FieldGroup>
+                </TabsContent>
+              </Tabs>
+            )}
           </div>
           <ChangesPanel
             state={preview}
@@ -451,6 +524,71 @@ export function SiteDialog({
         />
       )}
     </Dialog>
+  )
+}
+
+// rawTemplate starts the raw configuration of a site that the builder
+// cannot generate yet.
+function rawTemplate(domains: string[]): string {
+  return `server {
+  listen 80;
+  server_name ${domains.join(" ") || "example.com"};
+
+  location / {
+    proxy_pass http://127.0.0.1:3000;
+  }
+}
+`
+}
+
+// RawEditor edits the raw configuration of a site, which replaces the
+// builder.
+function RawEditor({
+  id,
+  value,
+  onChange,
+  error,
+  enabled,
+  onEnabledChange,
+  enabledId,
+}: {
+  id: string
+  value: string
+  onChange: (value: string) => void
+  error?: FieldProblem
+  enabled: boolean
+  onEnabledChange: (enabled: boolean) => void
+  enabledId: string
+}) {
+  const { t } = useI18n()
+  const message = useDescribe()(error)
+  return (
+    <FieldGroup>
+      <Field data-invalid={message ? true : undefined}>
+        <FieldLabel htmlFor={id}>{t.site.rawLabel}</FieldLabel>
+        <Textarea
+          id={id}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          spellCheck={false}
+          wrap="off"
+          aria-invalid={message ? true : undefined}
+          className="field-sizing-fixed h-[46svh] resize-y font-mono text-xs md:text-xs"
+        />
+        {message ? (
+          <FieldError>{message}</FieldError>
+        ) : (
+          <FieldDescription>{t.site.rawHint}</FieldDescription>
+        )}
+      </Field>
+      <ToggleCard
+        id={enabledId}
+        title={t.site.enabled}
+        description={t.site.enabledText}
+        checked={enabled}
+        onCheckedChange={onEnabledChange}
+      />
+    </FieldGroup>
   )
 }
 
