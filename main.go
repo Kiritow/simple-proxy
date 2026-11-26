@@ -20,6 +20,7 @@ import (
 
 	"github.com/kiritow/simple-proxy/internal/acme"
 	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/certs"
 	"github.com/kiritow/simple-proxy/internal/manager"
 	"github.com/kiritow/simple-proxy/internal/nginx"
 	"github.com/kiritow/simple-proxy/internal/store"
@@ -43,7 +44,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	flags := flag.NewFlagSet("simple-proxy", flag.ExitOnError)
 	flags.SetOutput(stderr)
 	addr := flags.String("addr", "127.0.0.1:8080", "`address` to serve HTTP on")
-	dbPath := flags.String("db", defaultDBPath(), "`path` of the SQLite database storing the sites")
+	dbPath := flags.String("db", defaultDBPath(), "`path` of the SQLite database storing the sites, certificates and CAs")
+	certDir := flags.String("cert-dir", "", "`directory` where uploaded and signed certificates are written for nginx (default: certs next to -db)")
 	nginxConf := flags.String("nginx-conf", "", "`path` of the nginx configuration file to manage, e.g. /etc/nginx/conf.d/proxy.conf; if empty, sites are only stored")
 	nginxTest := flags.String("nginx-test", "nginx -t", "`command` testing nginx's configuration")
 	nginxReload := flags.String("nginx-reload", "nginx -s reload", "`command` reloading nginx")
@@ -54,6 +56,14 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	_ = flags.Parse(args) // ExitOnError: Parse exits instead of returning errors
 
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
+	if *certDir == "" {
+		*certDir = filepath.Join(filepath.Dir(*dbPath), "certs")
+	}
+	// nginx resolves relative paths against its own prefix.
+	absCertDir, err := filepath.Abs(*certDir)
+	if err != nil {
+		return err
+	}
 	sites, err := store.Open(ctx, *dbPath)
 	if err != nil {
 		return err
@@ -69,6 +79,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	opts := manager.Options{
 		Store:       sites,
 		Generator:   gen,
+		CertDir:     certs.Dir(absCertDir),
 		ACMEWebroot: *acmeWebroot,
 		RenewHook:   *nginxReload,
 		Logger:      logger,
@@ -77,7 +88,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		ca := acme.NewClient(*acmeBin)
 		gen.Certs, opts.CA = ca, ca
 	} else {
-		logger.Warn("acme.sh not found: HTTPS sites and certificates are unavailable", "path", *acmeBin)
+		logger.Warn("acme.sh not found: only uploaded and signed certificates are available", "path", *acmeBin)
 	}
 	if *acmeWebroot != "" {
 		if err := os.MkdirAll(*acmeWebroot, 0o755); err != nil {
@@ -103,10 +114,9 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 
 	srv := &http.Server{
 		Handler: web.NewHandler(web.Options{
-			Manager:   m,
-			Generator: gen,
-			Example:   exampleConfig,
-			Logger:    logger,
+			Manager: m,
+			Example: exampleConfig,
+			Logger:  logger,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),

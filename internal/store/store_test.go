@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/kiritow/simple-proxy/internal/store"
@@ -175,8 +178,8 @@ func TestMigrationDropsRevisions(t *testing.T) {
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_schema WHERE name = 'revision'").Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
-	if version != 3 || tables != 0 {
-		t.Errorf("schema version %d with %d revision tables, want version 3 without", version, tables)
+	if version != 4 || tables != 0 {
+		t.Errorf("schema version %d with %d revision tables, want version 4 without", version, tables)
 	}
 }
 
@@ -208,5 +211,76 @@ func TestGenerationsCountChanges(t *testing.T) {
 	replace(store.Site{ID: "a", Config: json.RawMessage(`{"gzip": true}`), Generation: 9}, site("b", `{"gzip": false}`))
 	if got := generations(); got["a"] != 1 {
 		t.Errorf("generations = %v, want a still at 1", got)
+	}
+}
+
+func TestCerts(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "sites.db"))
+	ctx := t.Context()
+	a := store.Cert{Name: "a.example.com", CertPEM: []byte("cert a"), KeyPEM: []byte("key a")}
+	b := store.Cert{Name: "b.example.com", CertPEM: []byte("cert b"), KeyPEM: []byte("key b"), CA: "Root", KeyType: "ec", Days: 90}
+	if err := s.ReplaceCerts(ctx, []store.Cert{b, a}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Certs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Name != "a.example.com" || got[1].CA != "Root" || got[1].Days != 90 ||
+		string(got[1].KeyPEM) != "key b" || got[0].CreatedAt.IsZero() {
+		t.Fatalf("Certs = %+v, want a and b by name", got)
+	}
+
+	// Replacing b keeps its creation time; dropping a deletes it.
+	b.CertPEM = []byte("cert b2")
+	if err := s.Replace(ctx, nil, []store.Cert{b}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Certs(ctx)
+	if len(got) != 1 || string(got[0].CertPEM) != "cert b2" || got[0].CreatedAt.IsZero() {
+		t.Errorf("Certs = %+v, want b replaced", got)
+	}
+	if err := s.ReplaceCerts(ctx, []store.Cert{a, a}); err == nil {
+		t.Error("ReplaceCerts accepted duplicate names")
+	}
+}
+
+func TestAuthorities(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "sites.db"))
+	ctx := t.Context()
+	root := store.Authority{Name: "Home Root CA", CertPEM: []byte("cert"), KeyPEM: []byte("key")}
+	if err := s.AddAuthority(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddAuthority(ctx, root); !errors.Is(err, store.ErrExists) {
+		t.Errorf("adding it again: %v, want ErrExists", err)
+	}
+	got, err := s.Authorities(ctx)
+	if err != nil || len(got) != 1 || got[0].Name != root.Name || string(got[0].KeyPEM) != "key" {
+		t.Fatalf("Authorities = %+v, %v", got, err)
+	}
+	if err := s.DeleteAuthority(ctx, root.Name); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteAuthority(ctx, root.Name); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("deleting it again: %v, want ErrNotFound", err)
+	}
+}
+
+func TestDatabaseIsPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no POSIX permissions")
+	}
+	path := filepath.Join(t.TempDir(), "sites.db")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	open(t, path)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("the database has permissions %v, want -rw-------", perm)
 	}
 }

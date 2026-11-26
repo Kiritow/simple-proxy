@@ -8,7 +8,12 @@ forward them to), and saving applies it to nginx right away.
   prefixes, WebSocket, buffering, caching, gzip and raw nginx directives.
 - **HTTPS:** pick a certificate managed by acme.sh, or request a new one from
   the UI (HTTP-01 through nginx, or DNS-01 with an acme.sh DNS API). acme.sh
-  renews certificates and reloads nginx.
+  renews certificates and reloads nginx. Certificates from other providers
+  can be uploaded with their private keys, and replaced when renewed.
+- **Your own CA:** upload a certificate authority (its certificate and key)
+  to sign certificates for internal sites, such as `nas.lan`, wildcards or
+  IP addresses, and renew them with a click. Download the CA certificate to
+  install it on the devices that should trust these sites.
 - **Safe changes:** while you edit a site, a panel shows what saving would
   change in the nginx configuration, as a diff. Problems such as invalid
   ports, domains used by another site or missing certificates are shown next
@@ -23,9 +28,11 @@ forward them to), and saving applies it to nginx right away.
   imported, and the sites exported in the same format.
 - English and Chinese, following the browser's language.
 
-Sites are stored in an SQLite database, `sites.db`, in the directory of the
-executable. The console has no login, so it listens on 127.0.0.1 by default;
-reach it through an SSH tunnel or a VPN.
+Sites, uploaded certificates and CAs are stored in an SQLite database,
+`sites.db`, in the directory of the executable. It holds private keys, so
+only its owner can read it. The console has no login, so it listens on
+127.0.0.1 by default; reach it through an SSH tunnel or a VPN. Anyone who can
+reach it can sign certificates with your CAs.
 
 ## Run
 
@@ -42,11 +49,12 @@ is available. It also cross-compiles: `./build.sh linux/arm64` or
 | Flag             | Default                 | Description |
 | ---------------- | ----------------------- | ----------- |
 | `-addr`          | `127.0.0.1:8080`        | Address to serve the console on. |
-| `-db`            | `sites.db` next to the executable | SQLite database storing the sites. Set it when using `go run`, whose executable is temporary. |
+| `-db`            | `sites.db` next to the executable | SQLite database storing the sites, certificates and CAs. Set it when using `go run`, whose executable is temporary. |
+| `-cert-dir`      | `certs` next to `-db`   | Directory where uploaded and signed certificates are written for nginx to read. |
 | `-nginx-conf`    | none                    | The configuration file to manage, which nginx must include in its `http` block. Without it, sites are only stored. |
 | `-nginx-test`    | `nginx -t`              | Command testing nginx's configuration. |
 | `-nginx-reload`  | `nginx -s reload`       | Command reloading nginx; acme.sh also runs it after renewing certificates. |
-| `-acme`          | `~/.acme.sh/acme.sh`    | The acme.sh script. Without it, HTTPS is unavailable. |
+| `-acme`          | `~/.acme.sh/acme.sh`    | The acme.sh script. Without it, only uploaded and signed certificates are available. |
 | `-acme-webroot`  | none                    | Directory that nginx serves at `/.well-known/acme-challenge/` on port 80, to request certificates over HTTP. Without it, only DNS validation is available. |
 | `-fallback-cert` | `/certs/fallback.cer`   | Certificate presented to HTTPS requests for unknown hosts. |
 | `-fallback-key`  | `/certs/fallback.key`   | Private key of `-fallback-cert`. |
@@ -73,22 +81,42 @@ openssl req -x509 -newkey rsa:4096 -nodes -days 3650 -subj "/CN=example.com" \
   -keyout fallback.key -out fallback.cer
 ```
 
+### Uploaded and signed certificates
+
+Certificates kept by simple-proxy are written to `-cert-dir` as
+`<name>-<hash>/fullchain.pem` and `privkey.pem` (readable only by the owner;
+nginx reads keys as root). Each version of a certificate gets a directory of
+its own, so replacing or renewing a certificate changes the paths in the
+configuration: nginx tests the new files before using them, and if it rejects
+them, nothing changes. Old versions are removed once nginx runs the new ones,
+and the files are written again on startup if they are missing.
+
+Sites refer to certificates by name, whatever their source. A name is used
+by one certificate only: one uploaded or signed here takes precedence over
+acme.sh's, so neither can take a name the other has. Uploads accept PEM
+certificates with their chain in any order (the root is not served), and
+unencrypted PKCS #1, PKCS #8 or SEC 1 keys, in the same text or separately.
+Signed certificates use a new ECDSA P-256 or RSA 2048 key, and the CA's
+chain without its root.
+
 ### nginx in a container
 
-The configuration refers to certificates where acme.sh keeps them, and to
-`-acme-webroot`, so mount those into the container at the same paths. The
-file is rewritten in place, so it may be mounted on its own as well as with
-its directory.
+The configuration refers to certificates where acme.sh keeps them, to
+`-cert-dir`, and to `-acme-webroot`, so mount those into the container at the
+same paths. The file is rewritten in place, so it may be mounted on its own as
+well as with its directory.
 
 ```bash
 podman run -d --name nginx --network host \
   -v /srv/proxy/conf.d:/etc/nginx/conf.d \
   -v /srv/proxy/certs:/certs:ro \
+  -v /srv/proxy/local-certs:/srv/proxy/local-certs:ro \
   -v $HOME/.acme.sh:$HOME/.acme.sh:ro \
   -v /var/www/acme:/var/www/acme:ro \
   docker.io/nginx:latest
 
 simple-proxy -nginx-conf /srv/proxy/conf.d/proxy.conf \
+  -cert-dir /srv/proxy/local-certs \
   -nginx-test "podman exec nginx nginx -t" \
   -nginx-reload "podman exec nginx nginx -s reload" \
   -acme-webroot /var/www/acme
@@ -106,7 +134,7 @@ servers:
   enable: true             # default: true
   listen_port: 8443        # default: 80, or 443 with https
   https: true              # default: true if cert_name is set
-  cert_name: "*.example.com"  # acme.sh certificate, default: first server_name
+  cert_name: "*.example.com"  # certificate name, default: first server_name
   gzip: true               # default: false
   options:                 # extra directives for the server block
   - client_max_body_size 64m
@@ -147,8 +175,15 @@ The console is built on this API, which scripts can use as well. A site's
 | `GET /api/status`         | How sites are applied to nginx, and the last error. |
 | `POST /api/apply`         | Apply the stored sites again. |
 | `GET /api/nginx.conf`     | The configuration generated from the sites. |
-| `GET /api/certificates`   | The certificates acme.sh manages. |
-| `POST /api/certificates`  | Request one: `{"domains": ["example.com"], "dns": "dns_cf"}`; without `dns`, over HTTP. |
+| `GET /api/certificates`   | All certificates: `{"certificates": [{"name": "...", "source": "acme", ...}], "acme_error": "..."}`, where `source` is `acme`, `uploaded` or `signed`. |
+| `POST /api/certificates`  | Request one from acme.sh: `{"domains": ["example.com"], "dns": "dns_cf"}`; without `dns`, over HTTP. |
+| `POST /api/certificates/upload` | Upload one: `{"name": "...", "cert": "PEM", "key": "PEM", "replace": false}`; without `name`, it is named after its first domain. |
+| `POST /api/certificates/sign` | Have a CA sign one: `{"authority": "...", "domains": ["nas.lan"], "days": 365, "key_type": "ec", "name": "...", "replace": false}`; `key_type` is `ec` or `rsa`. |
+| `DELETE /api/certificates/{name}` | Delete an uploaded or signed certificate that no enabled site uses. |
+| `GET /api/authorities`    | The CAs: `{"authorities": [{"name": "...", "subject": "...", "expires": "...", "signed": 1}]}`. |
+| `POST /api/authorities`   | Upload a CA: `{"name": "...", "cert": "PEM", "key": "PEM"}`; without `name`, it is named after its common name. |
+| `DELETE /api/authorities/{name}` | Delete a CA; the certificates it signed stay. |
+| `GET /api/authorities/{name}/cert.pem` | The CA's certificate, to install on clients. |
 | `POST /api/generate`      | The configuration generated from a YAML or JSON configuration, without storing anything. |
 | `POST /api/validate`      | `204` if the configuration in the body is valid. |
 
@@ -156,14 +191,15 @@ Changes and deletions carry the generation of the site they are based on,
 and fail with `409` if the site has changed since; without a generation they
 always apply. Changes respond `400` for invalid sites, `422` for missing
 certificates, and `502` with nginx's output if nginx rejects the
-configuration. Errors are JSON:
+configuration. Private keys are never returned. Errors are JSON:
 
 ```json
 {"message": "...", "output": "nginx: [emerg] ...",
  "fields": [{"field": "servers[0].default.port", "message": "70000 is not a valid port", "code": "invalid_port", "value": "70000"}]}
 ```
 
-The `code` (see `config.ProblemCode`, plus `cert_not_found`) lets clients
+The `code` (see `config.ProblemCode` and `certs.ProblemCode`, plus
+`cert_not_found`) lets clients
 describe a problem in their own words, as the UI does in Chinese. `generate`
 and `validate` answer in plain text unless asked for JSON:
 
@@ -179,8 +215,9 @@ internal/config    configuration format, defaults and validation
 internal/nginx     configuration generator (nginx.conf.tmpl)
 internal/apply     writes, tests and reloads nginx's configuration
 internal/acme      certificates through acme.sh
-internal/store     SQLite storage of the sites (modernc.org/sqlite, no cgo)
-internal/manager   site changes: check, apply, then store
+internal/certs     uploaded certificates and CAs: parsing, signing, files
+internal/store     SQLite storage of sites, certificates and CAs (modernc.org/sqlite, no cgo)
+internal/manager   site and certificate changes: check, apply, then store
 internal/web       HTTP API, embeds the UI from internal/web/dist
 web/               UI: React, Tailwind CSS and shadcn/ui
 web/src/lib/i18n/  the UI's messages in English (en.ts) and Chinese (zh.ts)

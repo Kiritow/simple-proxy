@@ -15,12 +15,14 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/kiritow/simple-proxy/internal/acme"
 	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/certs"
 	"github.com/kiritow/simple-proxy/internal/config"
 	"github.com/kiritow/simple-proxy/internal/manager"
 	"github.com/kiritow/simple-proxy/internal/nginx"
@@ -36,11 +38,8 @@ var dist embed.FS
 // Options configure the handler returned by NewHandler.
 type Options struct {
 	Manager *manager.Manager
-	// Generator generates configuration for /api/generate, which does not
-	// involve the stored sites.
-	Generator *nginx.Generator
-	Example   []byte // the example configuration
-	Logger    *slog.Logger
+	Example []byte // the example configuration
+	Logger  *slog.Logger
 }
 
 // NewHandler returns a handler serving the browser UI at / and this API:
@@ -54,8 +53,15 @@ type Options struct {
 //	GET    /api/status        how configuration is applied to nginx
 //	POST   /api/apply         apply the stored sites again
 //	GET    /api/nginx.conf    the configuration generated from the sites
-//	GET    /api/certificates  the certificates managed by acme.sh
-//	POST   /api/certificates  issue one: {"domains": ["..."], "dns": "dns_cf"}
+//	GET    /api/certificates  the certificates: {"certificates": [...], "acme_error": "..."}
+//	POST   /api/certificates  have acme.sh issue one: {"domains": ["..."], "dns": "dns_cf"}
+//	POST   /api/certificates/upload  upload one: {"name": "...", "cert": "PEM", "key": "PEM", "replace": false}
+//	POST   /api/certificates/sign    have a CA sign one: {"name": "...", "authority": "...", "domains": ["..."], "days": 365, "key_type": "ec", "replace": false}
+//	DELETE /api/certificates/{name}  remove an uploaded or signed one
+//	GET    /api/authorities          the CAs: {"authorities": [...]}
+//	POST   /api/authorities          upload one: {"name": "...", "cert": "PEM", "key": "PEM"}
+//	DELETE /api/authorities/{name}   remove one
+//	GET    /api/authorities/{name}/cert.pem  its certificate, for clients to trust
 //	POST   /api/validate      204 if the configuration in the body is valid
 //	POST   /api/generate      the configuration generated from the body
 //	GET    /api/example       an example configuration
@@ -75,17 +81,19 @@ type Options struct {
 //
 //	{"message": "...", "fields": [{"field": "servers[0].default.port", "message": "...", "code": "invalid_port", "value": "70000"}], "output": "..."}
 //
-// where code is a config.ProblemCode, or "cert_not_found", and identifies
-// the problem for clients that describe it in their own words. Problems with
-// a submitted site refer to it as servers[0]. Only validate and generate
-// answer in plain text, unless the request accepts application/json.
+// where code is a config.ProblemCode, a certs.ProblemCode, or
+// "cert_not_found", and identifies the problem for clients that describe it
+// in their own words. Problems with a submitted site refer to it as
+// servers[0]; those with uploads and signing requests name their fields. Only
+// validate and generate answer in plain text, unless the request accepts
+// application/json. Private keys are never sent.
 func NewHandler(opts Options) http.Handler {
 	ui, err := fs.Sub(dist, "dist")
 	if err != nil {
 		panic(err) // dist is embedded, so this cannot happen
 	}
 	files := http.FileServerFS(ui)
-	h := &handler{m: opts.Manager, gen: opts.Generator, log: opts.Logger}
+	h := &handler{m: opts.Manager, log: opts.Logger}
 
 	mux := http.NewServeMux()
 	// Only the index page and the build output are routed to the file server,
@@ -107,6 +115,13 @@ func NewHandler(opts Options) http.Handler {
 	mux.HandleFunc("GET /api/nginx.conf", h.nginxConf)
 	mux.HandleFunc("GET /api/certificates", h.certificates)
 	mux.HandleFunc("POST /api/certificates", h.issueCertificate)
+	mux.HandleFunc("POST /api/certificates/upload", h.uploadCertificate)
+	mux.HandleFunc("POST /api/certificates/sign", h.signCertificate)
+	mux.HandleFunc("DELETE /api/certificates/{name}", h.deleteCertificate)
+	mux.HandleFunc("GET /api/authorities", h.authorities)
+	mux.HandleFunc("POST /api/authorities", h.addAuthority)
+	mux.HandleFunc("DELETE /api/authorities/{name}", h.deleteAuthority)
+	mux.HandleFunc("GET /api/authorities/{name}/cert.pem", h.authorityCert)
 	mux.HandleFunc("POST /api/validate", h.validate)
 	mux.HandleFunc("POST /api/generate", h.generate)
 	return mux
@@ -123,7 +138,6 @@ func immutable(next http.Handler) http.Handler {
 
 type handler struct {
 	m   *manager.Manager
-	gen *nginx.Generator
 	log *slog.Logger
 }
 
@@ -261,15 +275,92 @@ func (h *handler) nginxConf(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) certificates(w http.ResponseWriter, r *http.Request) {
-	certs, err := h.m.Certificates(r.Context())
+	list, err := h.m.Certificates(r.Context())
 	if err != nil {
-		if !errors.Is(err, manager.ErrNoCA) {
-			h.log.WarnContext(r.Context(), "listing certificates", "err", err)
-		}
-		writeError(w, r, http.StatusServiceUnavailable, err)
+		h.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string][]acme.Cert{"certificates": certs})
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (h *handler) uploadCertificate(w http.ResponseWriter, r *http.Request) {
+	var req manager.UploadRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	cert, err := h.m.UploadCertificate(r.Context(), req)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, cert)
+}
+
+func (h *handler) signCertificate(w http.ResponseWriter, r *http.Request) {
+	var req manager.SignRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	cert, err := h.m.SignCertificate(r.Context(), req)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, cert)
+}
+
+func (h *handler) deleteCertificate(w http.ResponseWriter, r *http.Request) {
+	if err := h.m.DeleteCertificate(r.Context(), r.PathValue("name")); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) authorities(w http.ResponseWriter, r *http.Request) {
+	cas, err := h.m.Authorities(r.Context())
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]manager.Authority{"authorities": cas})
+}
+
+func (h *handler) addAuthority(w http.ResponseWriter, r *http.Request) {
+	var req manager.UploadRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Replace {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "CAs cannot be replaced; delete the CA first"})
+		return
+	}
+	ca, err := h.m.AddAuthority(r.Context(), req)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, ca)
+}
+
+func (h *handler) deleteAuthority(w http.ResponseWriter, r *http.Request) {
+	if err := h.m.DeleteAuthority(r.Context(), r.PathValue("name")); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) authorityCert(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	pem, err := h.m.AuthorityCert(r.Context(), name)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name + ".crt"}))
+	w.Write(pem)
 }
 
 func (h *handler) issueCertificate(w http.ResponseWriter, r *http.Request) {
@@ -286,7 +377,7 @@ func (h *handler) issueCertificate(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, acme.ErrInvalidRequest), errors.Is(err, manager.ErrNoWebroot):
 		writeError(w, r, http.StatusBadRequest, err)
-	case errors.Is(err, manager.ErrNoCA):
+	case errors.Is(err, manager.ErrNoACME):
 		writeError(w, r, http.StatusServiceUnavailable, err)
 	case err != nil:
 		h.log.WarnContext(r.Context(), "issuing a certificate", "domains", req.Domains, "err", err)
@@ -307,7 +398,7 @@ func (h *handler) generate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	conf, err := h.gen.Generate(r.Context(), cfg)
+	conf, err := h.m.Generate(r.Context(), cfg)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -349,7 +440,7 @@ func (h *handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		status = http.StatusUnprocessableEntity
 	case errors.As(err, &fieldErrs), errors.As(err, &fieldErr), errors.As(err, &syntax):
 		status = http.StatusBadRequest
-	case errors.Is(err, manager.ErrNotFound):
+	case errors.Is(err, manager.ErrNotFound), errors.Is(err, manager.ErrNoCertificate), errors.Is(err, manager.ErrNoAuthority):
 		status = http.StatusNotFound
 	case errors.Is(err, manager.ErrConflict):
 		status = http.StatusConflict
@@ -450,9 +541,12 @@ func describe(err error) errorResponse {
 	for _, fe := range list {
 		f := fieldError{Field: fe.Field, Message: fe.Err.Error()}
 		var problem *config.Problem
+		var certProblem *certs.Problem
 		switch {
 		case errors.As(fe.Err, &problem):
 			f.Code, f.Value = string(problem.Code), problem.Value
+		case errors.As(fe.Err, &certProblem):
+			f.Code, f.Value = string(certProblem.Code), certProblem.Value
 		case errors.Is(fe.Err, nginx.ErrCertNotFound):
 			f.Code = certNotFound
 		}

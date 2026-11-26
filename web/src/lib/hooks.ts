@@ -4,7 +4,8 @@ import {
   api,
   errorOf,
   type ApiError,
-  type Certificate,
+  type Authority,
+  type CertificateList,
   type FieldProblem,
   type Preview,
   type Status,
@@ -57,8 +58,11 @@ export const useSites = (): Resource<StoredSite[]> => useResource(api.sites)
 // apply changes.
 export const useStatus = (): Resource<Status> => useResource(api.status, 15_000)
 
-export const useCertificates = (): Resource<Certificate[]> =>
+export const useCertificates = (): Resource<CertificateList> =>
   useResource(api.certificates)
+
+export const useAuthorities = (): Resource<Authority[]> =>
+  useResource(api.authorities)
 
 // Problems are problems the server found with a site being edited, by the
 // key of the input to fix.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/kiritow/simple-proxy/internal/acme"
 	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/certs"
 	"github.com/kiritow/simple-proxy/internal/config"
 	"github.com/kiritow/simple-proxy/internal/manager"
 	"github.com/kiritow/simple-proxy/internal/nginx"
@@ -39,15 +40,21 @@ func (f *fakeCA) Issue(_ context.Context, req acme.IssueRequest) (string, error)
 }
 
 type env struct {
-	m       *manager.Manager
-	store   *store.Store
-	ca      *fakeCA
-	conf    string // the file nginx includes
-	reloads string // a file logging reloads
+	m        *manager.Manager
+	store    *store.Store
+	ca       *fakeCA
+	conf     string // the file nginx includes
+	reloads  string // a file logging reloads
+	certDir  string
+	failFlag string // nginx rejects everything while this file exists
 }
 
-// newEnv returns a Manager applying to a fake nginx, which rejects
-// configurations containing "reject_me".
+// fakeNginxTest rejects configurations containing "reject_me", or while
+// the file $0.fail exists, or referring to missing PEM files.
+const fakeNginxTest = `if grep -q reject_me "$0" || [ -e "$0.fail" ]; then echo "nginx: [emerg] unknown directive" >&2; exit 1; fi
+for f in $(grep -o '"[^"]*\.pem"' "$0" | tr -d '"'); do [ -r "$f" ] || { echo "nginx: [emerg] cannot load $f" >&2; exit 1; }; done`
+
+// newEnv returns a Manager applying to a fake nginx, see fakeNginxTest.
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -60,13 +67,21 @@ func newEnv(t *testing.T) *env {
 	}
 	t.Cleanup(func() { s.Close() })
 
-	e := &env{store: s, ca: &fakeCA{}, conf: filepath.Join(dir, "proxy.conf"), reloads: filepath.Join(dir, "reloads")}
+	e := &env{
+		store:    s,
+		ca:       &fakeCA{},
+		conf:     filepath.Join(dir, "proxy.conf"),
+		reloads:  filepath.Join(dir, "reloads"),
+		certDir:  filepath.Join(dir, "certs"),
+		failFlag: filepath.Join(dir, "proxy.conf.fail"),
+	}
 	e.m = manager.New(manager.Options{
 		Store:     s,
 		Generator: &nginx.Generator{Certs: e.ca},
+		CertDir:   certs.Dir(e.certDir),
 		Applier: &apply.Applier{
 			Path:   e.conf,
-			Test:   []string{"sh", "-c", `if grep -q reject_me "$0"; then echo "nginx: [emerg] unknown directive" >&2; exit 1; fi`, e.conf},
+			Test:   []string{"sh", "-c", fakeNginxTest, e.conf},
 			Reload: []string{"sh", "-c", `echo reload >> "$0"`, e.reloads},
 		},
 		CA:          e.ca,
@@ -299,11 +314,14 @@ func TestWithoutApplier(t *testing.T) {
 	if err != nil || !strings.Contains(string(conf), "a.example.com") {
 		t.Errorf("NginxConfig = %s, %v", conf, err)
 	}
-	if st := m.Status(); st.Applies || st.Certificates {
-		t.Errorf("Status = %+v, want nothing applied and no certificates", st)
+	if st := m.Status(); st.Applies || st.ACME {
+		t.Errorf("Status = %+v, want nothing applied and no acme.sh", st)
 	}
-	if _, err := m.Certificates(t.Context()); !errors.Is(err, manager.ErrNoCA) {
-		t.Errorf("Certificates error = %v, want ErrNoCA", err)
+	if list, err := m.Certificates(t.Context()); err != nil || len(list.Certificates) != 0 || list.ACMEError != "" {
+		t.Errorf("Certificates = %+v, %v; want none", list, err)
+	}
+	if _, err := m.IssueCertificate(t.Context(), []string{"a.example.com"}, "dns_cf"); !errors.Is(err, manager.ErrNoACME) {
+		t.Errorf("IssueCertificate error = %v, want ErrNoACME", err)
 	}
 }
 

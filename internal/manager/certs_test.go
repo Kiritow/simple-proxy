@@ -1,0 +1,279 @@
+package manager_test
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/kiritow/simple-proxy/internal/acme"
+	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/certs"
+	"github.com/kiritow/simple-proxy/internal/certs/certstest"
+	"github.com/kiritow/simple-proxy/internal/config"
+	"github.com/kiritow/simple-proxy/internal/manager"
+)
+
+// problemOf returns the field and code of the problem err reports.
+func problemOf(err error) (string, string) {
+	var fe *config.FieldError
+	if !errors.As(err, &fe) {
+		return "", ""
+	}
+	var cp *certs.Problem
+	var p *config.Problem
+	switch {
+	case errors.As(err, &cp):
+		return fe.Field, string(cp.Code)
+	case errors.As(err, &p):
+		return fe.Field, string(p.Code)
+	}
+	return fe.Field, ""
+}
+
+var certPath = regexp.MustCompile(`ssl_certificate "([^"]+/fullchain\.pem)"`)
+
+// servedCert returns the path of the certificate file in the nginx
+// configuration.
+func (e *env) servedCert(t *testing.T) string {
+	t.Helper()
+	m := certPath.FindStringSubmatch(e.nginxConf(t))
+	if m == nil {
+		t.Fatalf("no ssl_certificate in\n%s", e.nginxConf(t))
+	}
+	return m[1]
+}
+
+func (e *env) certDirs(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(e.certDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
+}
+
+func TestUploadedCertificate(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	caCert, caKey := certstest.CA(t, "Test Root CA")
+	cert, key := certstest.Leaf(t, caCert, caKey, "app.example.com")
+
+	got, err := e.m.UploadCertificate(ctx, manager.UploadRequest{Cert: cert, Key: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "app.example.com" || got.Source != manager.SourceUploaded || got.Issuer != "Test Root CA" || got.Expires == "" {
+		t.Errorf("UploadCertificate = %+v", got)
+	}
+	if _, err := os.Stat(e.conf); !os.IsNotExist(err) {
+		t.Error("nginx was reloaded for an unused certificate")
+	}
+	list, err := e.m.Certificates(ctx)
+	if err != nil || len(list.Certificates) != 2 || list.Certificates[0].Name != "app.example.com" || list.Certificates[1].Source != manager.SourceACME {
+		t.Errorf("Certificates = %+v, %v; want the uploaded one and that of acme.sh", list, err)
+	}
+
+	// A site named like the certificate uses it.
+	if _, err := e.m.CreateSite(ctx, json.RawMessage(`{"server_name": "app.example.com", "https": true, "default": {"port": 3000}}`)); err != nil {
+		t.Fatal(err)
+	}
+	first := e.servedCert(t)
+	if !strings.HasPrefix(first, e.certDir) || strings.Contains(e.nginxConf(t), "ssl_stapling") {
+		t.Errorf("served %s, want a file in %s, without OCSP stapling", first, e.certDir)
+	}
+	if b, err := os.ReadFile(first); err != nil || !strings.Contains(string(b), "BEGIN CERTIFICATE") {
+		t.Errorf("reading %s: %v", first, err)
+	}
+
+	// Uploading again needs replace.
+	cert2, key2 := certstest.Leaf(t, caCert, caKey, "app.example.com")
+	_, err = e.m.UploadCertificate(ctx, manager.UploadRequest{Cert: cert2, Key: key2})
+	if field, code := problemOf(err); field != "name" || code != string(certs.NameInUse) {
+		t.Errorf("uploading a duplicate: %v", err)
+	}
+
+	// If nginx rejects the new certificate, nothing changes.
+	if err := os.WriteFile(e.failFlag, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var aerr *apply.Error
+	_, err = e.m.UploadCertificate(ctx, manager.UploadRequest{Cert: cert2, Key: key2, Replace: true})
+	if !errors.As(err, &aerr) {
+		t.Fatalf("replacing while nginx fails: %v, want an *apply.Error", err)
+	}
+	if e.servedCert(t) != first || len(e.certDirs(t)) != 1 {
+		t.Errorf("a rejected replacement changed the files: %v", e.certDirs(t))
+	}
+	stored, err := e.store.Certs(ctx)
+	if err != nil || len(stored) != 1 || !certstest.Parse(t, string(stored[0].CertPEM), string(stored[0].KeyPEM)).Leaf().Equal(certstest.Parse(t, cert, key).Leaf()) {
+		t.Errorf("a rejected replacement was stored (%v)", err)
+	}
+	os.Remove(e.failFlag)
+
+	// Replacing it serves the new files, and removes the old ones.
+	if _, err := e.m.UploadCertificate(ctx, manager.UploadRequest{Name: "app.example.com", Cert: cert2, Key: key2, Replace: true}); err != nil {
+		t.Fatal(err)
+	}
+	second := e.servedCert(t)
+	if second == first {
+		t.Error("the configuration still serves the old certificate")
+	}
+	if _, err := os.Stat(first); !os.IsNotExist(err) {
+		t.Errorf("the old certificate was kept: %v", err)
+	}
+
+	// Sites using it keep it.
+	err = e.m.DeleteCertificate(ctx, "app.example.com")
+	if field, code := problemOf(err); field != "name" || code != string(certs.CertInUse) || !strings.Contains(err.Error(), "used by app.example.com") {
+		t.Errorf("deleting a used certificate: %v", err)
+	}
+	if err := e.m.DeleteCertificate(ctx, "nope"); !errors.Is(err, manager.ErrNoCertificate) {
+		t.Errorf("deleting a missing certificate: %v", err)
+	}
+	sites := e.stored(t)
+	if err := e.m.DeleteSite(ctx, sites[0].ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.m.DeleteCertificate(ctx, "app.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if dirs := e.certDirs(t); len(dirs) != 0 {
+		t.Errorf("files left behind: %v", dirs)
+	}
+}
+
+func TestCertificateNames(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	caCert, caKey := certstest.CA(t, "Test Root CA")
+	cert, key := certstest.Leaf(t, caCert, caKey, "*.example.com")
+
+	// acme.sh has a certificate of that name.
+	_, err := e.m.UploadCertificate(ctx, manager.UploadRequest{Cert: cert, Key: key})
+	if field, code := problemOf(err); field != "name" || code != string(certs.NameInUse) {
+		t.Errorf("shadowing acme.sh: %v", err)
+	}
+	_, err = e.m.UploadCertificate(ctx, manager.UploadRequest{Name: "a b", Cert: cert, Key: key})
+	if field, code := problemOf(err); field != "name" || code != string(certs.InvalidCertName) {
+		t.Errorf("invalid name: %v", err)
+	}
+	if _, err := e.m.UploadCertificate(ctx, manager.UploadRequest{Name: "wild", Cert: cert, Key: key}); err != nil {
+		t.Fatal(err)
+	}
+	// acme.sh cannot issue one hidden by it.
+	if _, err := e.m.IssueCertificate(ctx, []string{"wild"}, "dns_cf"); !errors.Is(err, acme.ErrInvalidRequest) {
+		t.Errorf("issuing a hidden certificate: %v", err)
+	}
+	// Sites find uploaded certificates before those of acme.sh, and both.
+	if _, err := e.m.CreateSite(ctx, json.RawMessage(`{"server_name": "a.example.com", "cert_name": "wild", "default": {"port": 1}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.m.CreateSite(ctx, json.RawMessage(`{"server_name": "b.example.com", "cert_name": "*.example.com", "default": {"port": 1}}`)); err != nil {
+		t.Fatal(err)
+	}
+	conf := e.nginxConf(t)
+	if !strings.Contains(conf, `ssl_certificate "/c/full.cer"`) || !strings.Contains(conf, `ssl_certificate "`+e.certDir) {
+		t.Errorf("want certificates of both sources in\n%s", conf)
+	}
+}
+
+func TestSignedCertificates(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	caCert, caKey := certstest.CA(t, "Home Root CA")
+
+	ca, err := e.m.AddAuthority(ctx, manager.UploadRequest{Cert: caCert, Key: caKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ca.Name != "Home Root CA" || ca.Subject != "Home Root CA" || ca.Key != "EC P-256" {
+		t.Errorf("AddAuthority = %+v", ca)
+	}
+	_, err = e.m.AddAuthority(ctx, manager.UploadRequest{Cert: caCert, Key: caKey})
+	if field, code := problemOf(err); field != "name" || code != string(certs.NameInUse) {
+		t.Errorf("adding it again: %v", err)
+	}
+	leafCert, leafKey := certstest.Leaf(t, caCert, caKey, "a.example.com")
+	_, err = e.m.AddAuthority(ctx, manager.UploadRequest{Name: "Leaf", Cert: leafCert, Key: leafKey})
+	if field, code := problemOf(err); field != "cert" || code != string(certs.NotCA) {
+		t.Errorf("adding a leaf as CA: %v", err)
+	}
+
+	req := manager.SignRequest{Authority: "Home Root CA", Domains: []string{"nas.lan", "10.0.0.2"}, Days: 397, KeyType: certs.KeyRSA}
+	_, err = e.m.SignCertificate(ctx, req)
+	if field, code := problemOf(err); field != "days" || code != string(certs.BeyondCA) {
+		t.Errorf("signing beyond the CA: %v", err)
+	}
+	req.Days = 90
+	signed, err := e.m.SignCertificate(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signed.Name != "nas.lan" || signed.Source != manager.SourceSigned || signed.CA != "Home Root CA" ||
+		signed.KeyType != certs.KeyRSA || signed.Days != 90 || signed.Key != "RSA 2048" || strings.Join(signed.Domains, " ") != "nas.lan 10.0.0.2" {
+		t.Errorf("SignCertificate = %+v", signed)
+	}
+	if _, err := e.m.SignCertificate(ctx, req); err == nil {
+		t.Error("signing a duplicate succeeded")
+	}
+	req.Replace = true // renewal
+	if _, err := e.m.SignCertificate(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.m.SignCertificate(ctx, manager.SignRequest{Authority: "nope", Domains: []string{"x.lan"}, Days: 1, KeyType: certs.KeyEC})
+	if field, code := problemOf(err); field != "authority" || code != string(certs.CANotFound) {
+		t.Errorf("signing with a missing CA: %v", err)
+	}
+
+	cas, err := e.m.Authorities(ctx)
+	if err != nil || len(cas) != 1 || cas[0].Signed != 1 {
+		t.Errorf("Authorities = %+v, %v; want one CA that signed one certificate", cas, err)
+	}
+	pem, err := e.m.AuthorityCert(ctx, "Home Root CA")
+	if err != nil || !strings.Contains(string(pem), "BEGIN CERTIFICATE") || strings.Contains(string(pem), "PRIVATE") {
+		t.Errorf("AuthorityCert = %s, %v", pem, err)
+	}
+
+	// The certificate stays when its CA goes.
+	if err := e.m.DeleteAuthority(ctx, "Home Root CA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.m.DeleteAuthority(ctx, "Home Root CA"); !errors.Is(err, manager.ErrNoAuthority) {
+		t.Errorf("deleting it again: %v", err)
+	}
+	if list, _ := e.m.Certificates(ctx); list.Certificates[0].Name != "nas.lan" {
+		t.Errorf("Certificates = %+v", list)
+	}
+}
+
+// TestStartupRewritesFiles: if the files of certificates are lost, applying
+// the stored sites again writes them.
+func TestStartupRewritesFiles(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	caCert, caKey := certstest.CA(t, "Test Root CA")
+	cert, key := certstest.Leaf(t, caCert, caKey, "app.example.com")
+	if _, err := e.m.UploadCertificate(ctx, manager.UploadRequest{Cert: cert, Key: key}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.m.CreateSite(ctx, json.RawMessage(`{"server_name": "app.example.com", "https": true, "default": {"port": 3000}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(e.certDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.m.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Dir(e.servedCert(t))); err != nil {
+		t.Error(err)
+	}
+}

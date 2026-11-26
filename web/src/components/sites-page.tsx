@@ -51,7 +51,7 @@ import {
   api,
   downloadText,
   errorOf,
-  type Certificate,
+  type CertificateList,
   type Status,
   type StoredSite,
 } from "@/lib/api"
@@ -78,7 +78,7 @@ export function SitesPage({
 }: {
   sites: Resource<StoredSite[]>
   status: Status | null
-  certs: Resource<Certificate[]>
+  certs: Resource<CertificateList>
   onChanged: () => void // after sites changed
 }) {
   const { t } = useI18n()

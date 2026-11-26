@@ -49,19 +49,26 @@ var websocketDirectives = []directive{
 	{"proxy_set_header", "Connection $connection_upgrade"},
 }
 
-// tlsDirectives follow Mozilla's intermediate TLS configuration.
+// tlsDirectives follow Mozilla's intermediate TLS configuration. OCSP
+// stapling needs the CA chain, so it is only enabled if c names one.
 func tlsDirectives(c Certificate) []directive {
-	return []directive{
+	ds := []directive{
 		{"ssl_certificate", quote(c.Fullchain)},
 		{"ssl_certificate_key", quote(c.Key)},
-		{"ssl_trusted_certificate", quote(c.CA)},
+	}
+	if c.CA != "" {
+		ds = append(ds, directive{"ssl_trusted_certificate", quote(c.CA)})
+	}
+	ds = append(ds, []directive{
 		{"ssl_session_timeout", "1d"},
 		{"ssl_session_cache", "shared:MozSSL:10m"},
 		{"ssl_session_tickets", "off"},
 		{"ssl_protocols", "TLSv1.2 TLSv1.3"},
 		{"ssl_ciphers", "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384"},
 		{"ssl_prefer_server_ciphers", "off"},
-		{"ssl_stapling", "on"},
-		{"ssl_stapling_verify", "on"},
+	}...)
+	if c.CA != "" {
+		ds = append(ds, directive{"ssl_stapling", "on"}, directive{"ssl_stapling_verify", "on"})
 	}
+	return ds
 }

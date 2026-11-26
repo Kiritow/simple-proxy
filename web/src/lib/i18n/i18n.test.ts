@@ -52,7 +52,8 @@ test("every language has the same messages as English", () => {
 })
 
 test("problem codes match those of the server", () => {
-  // config.ProblemCode values, and cert_not_found from internal/web.
+  // config.ProblemCode and certs.ProblemCode values, and cert_not_found
+  // from internal/web.
   const codes = [
     "required",
     "port_required",
@@ -67,6 +68,24 @@ test("problem codes match those of the server", () => {
     "unterminated_quote",
     "domain_in_use",
     "cert_not_found",
+    "no_certificate",
+    "invalid_certificate",
+    "no_key",
+    "encrypted_key",
+    "invalid_key",
+    "key_mismatch",
+    "not_ca",
+    "expired",
+    "invalid_cert_name",
+    "invalid_ca_name",
+    "name_in_use",
+    "ca_not_found",
+    "no_domains",
+    "invalid_domain",
+    "invalid_days",
+    "beyond_ca",
+    "invalid_key_type",
+    "cert_in_use",
   ]
   for (const [lang, messages] of Object.entries(languages)) {
     assert.deepEqual(

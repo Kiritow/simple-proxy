@@ -33,9 +33,10 @@ export const en = {
     reloadCommand: "Reload command",
     lastApplied: "Last applied",
     never: "Never",
-    certificates: "Certificates",
-    acmeAvailable: "Managed with acme.sh",
-    acmeUnavailable: "Unavailable: acme.sh was not found",
+    acme: "acme.sh",
+    acmeAvailable: "Available",
+    acmeUnavailable: "Not found: only uploaded and signed certificates",
+    certDir: "Certificate files",
     webroot: "HTTP validation",
     noWebroot: "Not configured (DNS validation only)",
     applyAgain: "Apply again",
@@ -118,16 +119,17 @@ export const en = {
     httpsTitle: "Serve over HTTPS",
     httpsText: "Redirect plain HTTP to HTTPS and present a certificate.",
     certificate: "Certificate",
-    certLoading: "Loading certificates from acme.sh…",
+    certLoading: "Loading certificates…",
     certUnavailable: (reason: string) =>
-      `Certificates could not be listed (${reason}). Enter the name of an acme.sh certificate, or leave empty to use the first domain.`,
+      `Certificates could not be listed (${reason}). Enter the name of a certificate, or leave empty to use the first domain.`,
     certAuto: "Named after the first domain",
     certMatches: "matches",
     certNotFound: "not found",
-    certMissing: (name: string) => `acme.sh has no certificate named ${name}.`,
+    certMissing: (name: string) => `There is no certificate named ${name}.`,
     certUncovered: (cert: string, domains: string) =>
       `Warning: ${cert} does not cover ${domains}.`,
-    certHint: "Certificates issued by acme.sh on the server.",
+    certHint:
+      "Certificates of acme.sh, and those uploaded or signed on the Certificates page.",
     requestCert: "Request a certificate",
     listenPort: "Listen port",
     mainRoute: "Main route",
@@ -170,17 +172,109 @@ export const en = {
   certs: {
     title: "Certificates",
     description:
-      "Certificates managed by acme.sh on the server, which renews them automatically.",
-    request: "Request certificate",
+      "Certificates for HTTPS sites: issued and renewed by acme.sh, uploaded, or signed by your own CA.",
+    add: "Add certificate",
+    request: "Request with acme.sh",
+    requestText: "Publicly trusted, renewed automatically.",
+    requestUnavailable: "acme.sh was not found on the server.",
+    upload: "Upload",
+    uploadText: "A certificate and key from another provider.",
+    sign: "Sign with your CA",
+    signText: "For internal sites, with a CA uploaded below.",
+    signUnavailable: "Upload a CA first.",
     name: "Name",
     domains: "Domains",
+    issuer: "Issued by",
     key: "Key",
-    ca: "Issuer",
-    created: "Created",
-    renews: "Renews",
+    expires: "Expires",
+    renews: (date: string) => `Renews ${date}`,
+    sources: { acme: "acme.sh", uploaded: "Uploaded", signed: "Signed" },
+    expired: "Expired",
     emptyTitle: "No certificates yet",
-    emptyText: "Request one for the domains of your HTTPS sites.",
-    unavailable: "Certificates are not available",
+    emptyText:
+      "Request, upload or sign one for the domains of your HTTPS sites.",
+    loadFailed: "The certificates could not be loaded",
+    acmeFailed: "acme.sh could not list its certificates",
+    replace: "Replace",
+    renew: "Renew",
+    renewUnavailable: (ca: string) =>
+      `Cannot be renewed: the CA ${ca} was deleted.`,
+    remove: "Delete",
+    removeTitle: (name: string) => `Delete certificate ${name}?`,
+    removeText:
+      "Its files are removed from the server. Sites must not use it anymore.",
+    removed: (name: string) => `Deleted certificate ${name}`,
+    removeFailed: "The certificate could not be deleted",
+    casTitle: "Certificate authorities",
+    casDescription:
+      "Your own CAs, which sign certificates for internal sites. Devices trust these certificates once they trust the CA: download its certificate and install it on them.",
+    addCA: "Upload CA",
+    subject: "Subject",
+    selfSigned: "Self-signed",
+    signedCount: "Signed",
+    noCAsTitle: "No CAs yet",
+    noCAsText:
+      "Upload the certificate and private key of a CA to sign certificates with it.",
+    signWith: "Sign a certificate",
+    downloadCA: "Download certificate",
+    removeCA: "Delete CA",
+    removeCATitle: (name: string) => `Delete CA ${name}?`,
+    removeCAText: (n: number) =>
+      n > 0
+        ? `Its private key is removed from the server. The ${n === 1 ? "certificate" : `${n} certificates`} it signed stay, but cannot be renewed.`
+        : "Its private key is removed from the server.",
+    removedCA: (name: string) => `Deleted CA ${name}`,
+    casLoadFailed: "The CAs could not be loaded",
+  },
+  upload: {
+    title: "Upload a certificate",
+    description:
+      "The certificate in PEM format, followed by its intermediate certificates, and its private key.",
+    replaceTitle: (name: string) => `Replace ${name}`,
+    replaceDescription:
+      "Upload the new version, e.g. after renewing it with your provider. Sites using it serve the new one right away.",
+    caTitle: "Upload a CA",
+    caDescription:
+      "The certificate of the CA in PEM format, and its private key, which stays on the server to sign certificates.",
+    name: "Name",
+    nameHint:
+      "Sites refer to the certificate by name. Leave empty to use its first domain.",
+    caNameHint: "Leave empty to use the common name of the CA.",
+    namePlaceholder: "From the certificate",
+    cert: "Certificate",
+    key: "Private key",
+    keyHint:
+      "Without a passphrase. It may also be pasted above, after the certificate.",
+    openFile: "Open file",
+    submit: "Upload",
+    uploading: "Uploading…",
+    uploaded: (name: string) => `Uploaded ${name}`,
+    failed: "The certificate could not be uploaded",
+  },
+  sign: {
+    title: "Sign a certificate",
+    description:
+      "Your CA signs a certificate with a new private key, which is kept on the server.",
+    renewTitle: (name: string) => `Renew ${name}`,
+    renewDescription:
+      "Your CA signs it again, with a new key. Sites using it serve the new one right away.",
+    authority: "CA",
+    domains: "Domains",
+    domainsHint:
+      "Separate several with spaces. Internal names such as nas.lan, wildcards and IP addresses work.",
+    name: "Name",
+    nameHint: "Leave empty to use the first domain.",
+    days: "Valid for (days)",
+    daysHint: "Apple devices reject certificates valid for more than 825 days.",
+    keyType: "Key",
+    ec: "ECDSA P-256",
+    ecText: "Recommended: small and fast.",
+    rsa: "RSA 2048",
+    rsaText: "For old clients.",
+    submit: "Sign",
+    signing: "Signing…",
+    signed: (name: string) => `Signed ${name}`,
+    failed: "The certificate could not be signed",
   },
   issue: {
     title: "Request a certificate",
@@ -242,7 +336,32 @@ export const en = {
     trailing_backslash: () => "Must not end with a backslash.",
     unterminated_quote: () => "A quote is not closed.",
     domain_in_use: (v: string) => `${v} is already used by another site.`,
-    cert_not_found: () => "acme.sh has no such certificate.",
+    cert_not_found: () => "There is no certificate of this name.",
+    no_certificate: () =>
+      "No certificate found. It starts with -----BEGIN CERTIFICATE-----.",
+    invalid_certificate: (v: string) => `Not a valid certificate: ${v}`,
+    no_key: () =>
+      "No private key found. It starts with -----BEGIN PRIVATE KEY----- or similar.",
+    encrypted_key: () =>
+      "The key is encrypted. Remove its passphrase, e.g. with: openssl pkey -in key.pem -out plain.pem",
+    invalid_key: (v: string) => `Not a valid private key: ${v}`,
+    key_mismatch: () => "This key does not belong to the certificate.",
+    not_ca: () => "This is not the certificate of a CA.",
+    expired: (v: string) => `It expired on ${v}.`,
+    invalid_cert_name: (v: string) =>
+      `"${v}" is not a valid name. Use letters, digits and . - _ * :`,
+    invalid_ca_name: (v: string) =>
+      `"${v}" is not a valid name: at most 64 characters, without /.`,
+    name_in_use: (v: string) => `The name ${v} is taken.`,
+    ca_not_found: (v: string) => `There is no CA named ${v}.`,
+    no_domains: () => "Enter at least one domain.",
+    invalid_domain: (v: string) => `"${v}" is not a domain name or IP address.`,
+    invalid_days: (v: string) => `${v} is not between 1 and 3650.`,
+    beyond_ca: (v: string) =>
+      `The CA expires on ${v}, before the certificate would. Choose fewer days.`,
+    invalid_key_type: (v: string) => `"${v}" is not a key type.`,
+    cert_in_use: (v: string) =>
+      `Used by ${v}. Choose another certificate for these sites first.`,
   } as Record<string, (value: string) => string>,
 }
 

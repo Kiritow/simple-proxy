@@ -150,16 +150,17 @@ export function StatusDialog({
                     </Item>
                   </>
                 )}
-                <Item term={t.status.certificates}>
-                  {s.certificates
-                    ? t.status.acmeAvailable
-                    : t.status.acmeUnavailable}
+                <Item term={t.status.acme}>
+                  {s.acme ? t.status.acmeAvailable : t.status.acmeUnavailable}
                 </Item>
-                {s.certificates && (
+                {s.acme && (
                   <Item term={t.status.webroot} mono={Boolean(s.acme_webroot)}>
                     {s.acme_webroot || t.status.noWebroot}
                   </Item>
                 )}
+                <Item term={t.status.certDir} mono>
+                  {s.cert_dir}
+                </Item>
               </dl>
             )}
           </TabsContent>

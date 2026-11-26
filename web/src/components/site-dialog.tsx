@@ -39,7 +39,7 @@ import {
   api,
   errorOf,
   type ApiError,
-  type Certificate,
+  type CertificateList,
   type Status,
   type StoredSite,
 } from "@/lib/api"
@@ -98,7 +98,7 @@ export function SiteDialog({
   onOpenChange: (open: boolean) => void
   stored: StoredSite | null
   initial?: Site // for a new site
-  certs: Resource<Certificate[]>
+  certs: Resource<CertificateList>
   status: Status | null
   onSaved: () => void
 }) {
@@ -354,7 +354,7 @@ export function SiteDialog({
                       error={problems.byKey.get(`${key}.cert_name`)}
                       onChange={(certName) => patch({ certName })}
                       onRequest={
-                        status?.certificates
+                        status?.acme
                           ? () => setIssuing({ key: Date.now() })
                           : undefined
                       }

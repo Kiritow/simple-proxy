@@ -33,7 +33,9 @@ var ErrCertNotFound = errors.New("certificate not found")
 type Certificate struct {
 	Fullchain string // certificate followed by its intermediates
 	Key       string // private key
-	CA        string // CA chain used to verify OCSP responses
+	// CA is the CA chain used to verify OCSP responses. If empty, OCSP
+	// stapling is disabled.
+	CA string
 }
 
 // CertLocator finds certificates by name.

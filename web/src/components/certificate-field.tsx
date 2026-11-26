@@ -17,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { Certificate, FieldProblem } from "@/lib/api"
+import type { CertificateList, FieldProblem } from "@/lib/api"
 import type { Resource } from "@/lib/hooks"
 import { useI18n } from "@/lib/i18n"
 import {
@@ -40,7 +40,7 @@ export function CertificateField({
   onRequest,
 }: {
   site: Site
-  certs: Resource<Certificate[]>
+  certs: Resource<CertificateList>
   error?: FieldProblem
   onChange: (certName: string) => void
   onRequest?: () => void // offers to request a certificate
@@ -77,10 +77,12 @@ export function CertificateField({
     )
   }
 
-  const known = new Set(certs.data.map((c) => c.name))
+  const list = certs.data.certificates
+  const known = new Set(list.map((c) => c.name))
   // The names a certificate is valid for; just its name if it is unknown.
   const namesOf = (cert: string) =>
-    certs.data?.find((c) => c.name === cert)?.domains ?? [cert]
+    list.find((c) => c.name === cert)?.domains ?? [cert]
+  const sourceOf = (cert: string) => list.find((c) => c.name === cert)?.source
   const covers = (cert: string) =>
     domains.length > 0 && uncovered(domains, namesOf(cert)).length === 0
   const names = [...known]
@@ -116,6 +118,11 @@ export function CertificateField({
             {names.map((name) => (
               <SelectItem key={name} value={name}>
                 <span className="font-mono">{name}</span>
+                {known.has(name) && (
+                  <span className="text-xs text-muted-foreground">
+                    {t.certs.sources[sourceOf(name) ?? "acme"]}
+                  </span>
+                )}
                 {!known.has(name) ? (
                   <Badge variant="destructive">{t.site.certNotFound}</Badge>
                 ) : (

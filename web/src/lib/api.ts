@@ -49,17 +49,63 @@ export type Status = {
   applied_at?: string
   error?: string
   output?: string
-  certificates: boolean
+  acme: boolean // acme.sh can list and issue certificates
   acme_webroot?: string
+  cert_dir: string // where uploaded and signed certificates are written
 }
+
+export type CertificateSource = "acme" | "uploaded" | "signed"
+
+// KeyType is the type of the key of a signed certificate.
+export type KeyType = "ec" | "rsa"
 
 export type Certificate = {
   name: string
+  source: CertificateSource
   domains: string[]
-  key_length: string
-  ca: string
+  key: string // such as "EC P-256", or "ec-256" for acme.sh
+  issuer: string
+  created?: string
+  expires?: string // not known for acme.sh
+  renews?: string // acme.sh's next renewal
+  // How a signed certificate was signed, to sign it again.
+  ca?: string
+  key_type?: KeyType
+  days?: number
+}
+
+export type CertificateList = {
+  certificates: Certificate[]
+  acme_error?: string // acme.sh failed to list its certificates
+}
+
+// Authority is a certificate authority (CA) that signs certificates.
+export type Authority = {
+  name: string
+  subject: string
+  issuer: string
+  key: string
   created: string
-  renew: string
+  expires: string
+  signed: number // certificates kept that it signed
+}
+
+// Upload is a certificate or CA to upload: its PEM chain and private key.
+// Without a name, it is named after the certificate.
+export type Upload = {
+  name: string
+  cert: string
+  key: string
+  replace: boolean
+}
+
+export type SignRequest = {
+  name: string
+  authority: string
+  domains: string[]
+  days: number
+  key_type: KeyType
+  replace: boolean
 }
 
 async function request<T>(
@@ -138,15 +184,39 @@ export const api = {
   apply: () => request<Status>("api/apply", { method: "POST" }),
   nginxConf: () => request<string>("api/nginx.conf"),
 
-  certificates: () =>
-    request<{ certificates: Certificate[] }>("api/certificates").then(
-      (r) => r.certificates
-    ),
+  certificates: () => request<CertificateList>("api/certificates"),
   issueCertificate: (domains: string[], dns: string) =>
     request<{ output: string }>("api/certificates", {
       method: "POST",
       json: { domains, dns },
     }).then((r) => r.output),
+  uploadCertificate: (upload: Upload) =>
+    request<Certificate>("api/certificates/upload", {
+      method: "POST",
+      json: upload,
+    }),
+  signCertificate: (req: SignRequest) =>
+    request<Certificate>("api/certificates/sign", {
+      method: "POST",
+      json: req,
+    }),
+  deleteCertificate: (name: string) =>
+    request<void>(`api/certificates/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
+
+  authorities: () =>
+    request<{ authorities: Authority[] }>("api/authorities").then(
+      (r) => r.authorities
+    ),
+  addAuthority: (upload: Omit<Upload, "replace">) =>
+    request<Authority>("api/authorities", { method: "POST", json: upload }),
+  deleteAuthority: (name: string) =>
+    request<void>(`api/authorities/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
+  authorityCertUrl: (name: string) =>
+    `api/authorities/${encodeURIComponent(name)}/cert.pem`,
 
   validate: (config: ConfigJSON, signal?: AbortSignal) =>
     request<void>("api/validate", { method: "POST", json: config, signal }),

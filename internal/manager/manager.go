@@ -4,6 +4,7 @@
 package manager
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/kiritow/simple-proxy/internal/acme"
 	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/certs"
 	"github.com/kiritow/simple-proxy/internal/config"
 	"github.com/kiritow/simple-proxy/internal/nginx"
 	"github.com/kiritow/simple-proxy/internal/store"
@@ -28,8 +30,8 @@ var (
 	// ErrConflict reports a change based on an outdated generation of a
 	// site, which someone else changed in the meantime.
 	ErrConflict = errors.New("the site was changed by someone else")
-	// ErrNoCA reports that certificates cannot be managed.
-	ErrNoCA = errors.New("certificates are not available: acme.sh is not configured")
+	// ErrNoACME reports that acme.sh is not available.
+	ErrNoACME = errors.New("acme.sh is not available")
 	// ErrNoWebroot reports that HTTP validation is not configured.
 	ErrNoWebroot = errors.New("HTTP validation needs an ACME webroot (-acme-webroot); use DNS validation instead")
 )
@@ -42,12 +44,19 @@ type CertAuthority interface {
 
 // Options configure a Manager.
 type Options struct {
-	Store     *store.Store
+	Store *store.Store
+	// Generator generates the nginx configuration. Its Certs, if any, find
+	// the certificates that the Manager does not keep itself, i.e. those of
+	// acme.sh.
 	Generator *nginx.Generator
+	// CertDir is where the files of the certificates kept by the Manager are
+	// written for nginx.
+	CertDir certs.Dir
 	// Applier installs the configuration into nginx. If nil, sites are only
 	// stored.
 	Applier *apply.Applier
-	// CA manages certificates. If nil, certificates are not available.
+	// CA manages certificates with acme.sh. If nil, only certificates kept
+	// by the Manager are available.
 	CA CertAuthority
 	// ACMEWebroot is the directory that the Generator serves for HTTP-01
 	// validation. If empty, certificates can only be issued with DNS-01.
@@ -75,6 +84,9 @@ type Manager struct {
 
 // New returns a Manager.
 func New(opts Options) *Manager {
+	if opts.Logger == nil {
+		opts.Logger = slog.New(slog.DiscardHandler)
+	}
 	m := &Manager{opts: opts}
 	if a := opts.Applier; a != nil {
 		m.status.Applies = true
@@ -82,8 +94,9 @@ func New(opts Options) *Manager {
 		m.status.TestCommand = strings.Join(a.Test, " ")
 		m.status.ReloadCommand = strings.Join(a.Reload, " ")
 	}
-	m.status.Certificates = opts.CA != nil
+	m.status.ACME = opts.CA != nil
 	m.status.ACMEWebroot = opts.ACMEWebroot
+	m.status.CertDir = string(opts.CertDir)
 	return m
 }
 
@@ -101,10 +114,13 @@ type Status struct {
 	// them failed, e.g. on startup. Output is that of the failed command.
 	Error  string `json:"error,omitempty"`
 	Output string `json:"output,omitempty"`
-	// Certificates tells whether certificates can be listed and issued;
-	// with HTTP-01 validation only if ACMEWebroot is set.
-	Certificates bool   `json:"certificates"`
-	ACMEWebroot  string `json:"acme_webroot,omitempty"`
+	// ACME tells whether acme.sh can list and issue certificates; with
+	// HTTP-01 validation only if ACMEWebroot is set.
+	ACME        bool   `json:"acme"`
+	ACMEWebroot string `json:"acme_webroot,omitempty"`
+	// CertDir is where the files of uploaded and signed certificates are
+	// written for nginx.
+	CertDir string `json:"cert_dir"`
 }
 
 func (m *Manager) Status() Status {
@@ -158,11 +174,12 @@ func (m *Manager) Sites(ctx context.Context) ([]SiteInfo, error) {
 // an *apply.Error. In both cases nothing changes.
 func (m *Manager) CreateSite(ctx context.Context, cfg json.RawMessage) (store.Site, error) {
 	site := store.Site{ID: rand.Text(), Config: cfg}
-	err := m.change(ctx, func(sites []store.Site) ([]store.Site, error) {
-		if err := m.checkSite(ctx, site, sites); err != nil {
-			return nil, err
+	err := m.change(ctx, func(st *state) error {
+		if err := m.checkSite(ctx, site, st.sites, st.certs); err != nil {
+			return err
 		}
-		return append(sites, site), nil
+		st.sites = append(st.sites, site)
+		return nil
 	})
 	if err != nil {
 		return store.Site{}, err
@@ -176,17 +193,17 @@ func (m *Manager) CreateSite(ctx context.Context, cfg json.RawMessage) (store.Si
 // generation of 0 changes the site whatever its generation.
 func (m *Manager) UpdateSite(ctx context.Context, id string, generation int64, cfg json.RawMessage) (store.Site, error) {
 	site := store.Site{ID: id, Config: cfg}
-	err := m.change(ctx, func(sites []store.Site) ([]store.Site, error) {
-		i, err := find(sites, id, generation)
+	err := m.change(ctx, func(st *state) error {
+		i, err := find(st.sites, id, generation)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		others := slices.Delete(slices.Clone(sites), i, i+1)
-		if err := m.checkSite(ctx, site, others); err != nil {
-			return nil, err
+		others := slices.Delete(slices.Clone(st.sites), i, i+1)
+		if err := m.checkSite(ctx, site, others, st.certs); err != nil {
+			return err
 		}
-		sites[i] = site
-		return sites, nil
+		st.sites[i] = site
+		return nil
 	})
 	if err != nil {
 		return store.Site{}, err
@@ -197,12 +214,13 @@ func (m *Manager) UpdateSite(ctx context.Context, id string, generation int64, c
 // DeleteSite removes a site, if it is still at the given generation, like
 // UpdateSite.
 func (m *Manager) DeleteSite(ctx context.Context, id string, generation int64) error {
-	return m.change(ctx, func(sites []store.Site) ([]store.Site, error) {
-		i, err := find(sites, id, generation)
+	return m.change(ctx, func(st *state) error {
+		i, err := find(st.sites, id, generation)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		return slices.Delete(sites, i, i+1), nil
+		st.sites = slices.Delete(st.sites, i, i+1)
+		return nil
 	})
 }
 
@@ -245,33 +263,33 @@ type Preview struct {
 // returns what saving it would change, without changing anything. Unlike
 // UpdateSite, it does not check generations, but reports the current one.
 func (m *Manager) Preview(ctx context.Context, id string, cfg json.RawMessage) (Preview, error) {
-	sites, err := m.opts.Store.Sites(ctx)
+	current, err := m.load(ctx)
 	if err != nil {
 		return Preview{}, err
 	}
 	site := store.Site{ID: id, Config: cfg}
-	next := slices.Clone(sites)
+	next := current.clone()
 	var p Preview
 	if id == "" {
-		if err := m.checkSite(ctx, site, sites); err != nil {
+		if err := m.checkSite(ctx, site, current.sites, current.certs); err != nil {
 			return Preview{}, err
 		}
-		next = append(next, site)
+		next.sites = append(next.sites, site)
 	} else {
-		i, err := find(sites, id, 0)
+		i, err := find(current.sites, id, 0)
 		if err != nil {
 			return Preview{}, err
 		}
-		p.Generation = sites[i].Generation
-		others := slices.Delete(slices.Clone(sites), i, i+1)
-		if err := m.checkSite(ctx, site, others); err != nil {
+		p.Generation = current.sites[i].Generation
+		others := slices.Delete(slices.Clone(current.sites), i, i+1)
+		if err := m.checkSite(ctx, site, others, current.certs); err != nil {
 			return Preview{}, err
 		}
-		next[i] = site
+		next.sites[i] = site
 	}
 
 	now := time.Now()
-	if p.Current, err = m.renderAt(ctx, sites, now); err != nil {
+	if p.Current, err = m.renderAt(ctx, current, now); err != nil {
 		return Preview{}, err
 	}
 	if p.Proposed, err = m.renderAt(ctx, next, now); err != nil {
@@ -288,10 +306,10 @@ func (m *Manager) ReplaceSites(ctx context.Context, configs []json.RawMessage) (
 	for i, cfg := range configs {
 		sites[i] = store.Site{ID: rand.Text(), Config: cfg}
 	}
-	err := m.change(ctx, func([]store.Site) ([]store.Site, error) {
+	err := m.change(ctx, func(st *state) error {
 		cfg, err := parse(sites)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		var errs config.FieldErrors
 		for i, server := range cfg.Servers {
@@ -299,9 +317,10 @@ func (m *Manager) ReplaceSites(ctx context.Context, configs []json.RawMessage) (
 			errs = append(errs, domainConflicts(server, sites[:i], field)...)
 		}
 		if len(errs) > 0 {
-			return nil, errs
+			return errs
 		}
-		return sites, nil
+		st.sites = sites
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -309,58 +328,126 @@ func (m *Manager) ReplaceSites(ctx context.Context, configs []json.RawMessage) (
 	return m.opts.Store.Sites(ctx)
 }
 
-// change replaces the stored sites with those returned by edit, after
-// applying their configuration.
-func (m *Manager) change(ctx context.Context, edit func([]store.Site) ([]store.Site, error)) error {
+// state is what the nginx configuration is generated from: the sites, and
+// the certificates kept by the Manager.
+type state struct {
+	sites []store.Site
+	certs []store.Cert
+}
+
+func (m *Manager) load(ctx context.Context) (state, error) {
+	sites, err := m.opts.Store.Sites(ctx)
+	if err != nil {
+		return state{}, err
+	}
+	certs, err := m.opts.Store.Certs(ctx)
+	if err != nil {
+		return state{}, err
+	}
+	return state{sites: sites, certs: certs}, nil
+}
+
+func (st state) clone() state {
+	return state{sites: slices.Clone(st.sites), certs: slices.Clone(st.certs)}
+}
+
+// change stores the state as changed by edit, after applying its
+// configuration. Unless the sites changed, nginx is left alone if the
+// configuration stays the same, e.g. when an unused certificate changes.
+func (m *Manager) change(ctx context.Context, edit func(*state) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	current, err := m.opts.Store.Sites(ctx)
+	current, err := m.load(ctx)
 	if err != nil {
 		return err
 	}
-	next, err := edit(slices.Clone(current))
+	next := current.clone()
+	if err := edit(&next); err != nil {
+		return err
+	}
+	now := time.Now()
+	conf, err := m.renderAt(ctx, next, now)
 	if err != nil {
 		return err
 	}
-	conf, err := m.render(ctx, next)
-	if err != nil {
+	apply := m.opts.Applier != nil
+	if apply && slices.EqualFunc(current.sites, next.sites, sameSite) {
+		before, err := m.renderAt(ctx, current, now)
+		apply = err != nil || !bytes.Equal(before, conf)
+	}
+
+	if err := m.writeCerts(next); err != nil {
 		return err
 	}
-	if a := m.opts.Applier; a != nil {
+	if apply {
 		// If nginx rejects the configuration, Apply restores the previous
 		// one, which nginx keeps running.
-		if err := a.Apply(ctx, conf); err != nil {
+		if err := m.opts.Applier.Apply(ctx, conf); err != nil {
+			m.pruneCerts(current)
 			return err
 		}
 	}
-	if err := m.opts.Store.ReplaceSites(ctx, next); err != nil {
+	if err := m.opts.Store.Replace(ctx, next.sites, next.certs); err != nil {
 		// nginx runs sites that are not stored: go back to the stored ones.
-		m.applied(m.applyLocked(ctx, current))
+		if apply {
+			m.applied(m.applyLocked(ctx, current))
+		}
+		m.pruneCerts(current)
 		return err
 	}
-	if m.opts.Applier != nil {
+	m.pruneCerts(next)
+	if apply {
 		m.applied(nil)
 	}
 	return nil
+}
+
+func sameSite(a, b store.Site) bool { return a.ID == b.ID && bytes.Equal(a.Config, b.Config) }
+
+// writeCerts writes the files of the certificates of st for nginx.
+func (m *Manager) writeCerts(st state) error {
+	for _, c := range st.certs {
+		if err := m.opts.CertDir.Write(c.Name, c.CertPEM, c.KeyPEM); err != nil {
+			return fmt.Errorf("writing the files of certificate %s: %w", c.Name, err)
+		}
+	}
+	return nil
+}
+
+// pruneCerts removes the files of certificates other than those of st.
+func (m *Manager) pruneCerts(st state) {
+	keep := make([]nginx.Certificate, len(st.certs))
+	for i, c := range st.certs {
+		keep[i] = m.opts.CertDir.Files(c.Name, c.CertPEM, c.KeyPEM)
+	}
+	if err := m.opts.CertDir.Prune(keep); err != nil {
+		m.opts.Logger.Warn("removing the files of old certificates", "err", err)
+	}
 }
 
 // Apply applies the stored sites again, e.g. after nginx restarted.
 func (m *Manager) Apply(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	sites, err := m.opts.Store.Sites(ctx)
+	st, err := m.load(ctx)
 	if err != nil {
 		return err
 	}
-	err = m.applyLocked(ctx, sites)
+	err = m.applyLocked(ctx, st)
+	if err == nil {
+		m.pruneCerts(st)
+	}
 	m.applied(err)
 	return err
 }
 
-func (m *Manager) applyLocked(ctx context.Context, sites []store.Site) error {
-	conf, err := m.render(ctx, sites)
+func (m *Manager) applyLocked(ctx context.Context, st state) error {
+	conf, err := m.renderAt(ctx, st, time.Now())
 	if err != nil {
+		return err
+	}
+	if err := m.writeCerts(st); err != nil {
 		return err
 	}
 	if m.opts.Applier == nil {
@@ -371,21 +458,58 @@ func (m *Manager) applyLocked(ctx context.Context, sites []store.Site) error {
 
 // NginxConfig returns the configuration generated from the stored sites.
 func (m *Manager) NginxConfig(ctx context.Context) ([]byte, error) {
-	sites, err := m.opts.Store.Sites(ctx)
+	st, err := m.load(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return m.render(ctx, sites)
+	return m.renderAt(ctx, st, time.Now())
 }
 
-// render generates the configuration of the valid sites.
-func (m *Manager) render(ctx context.Context, sites []store.Site) ([]byte, error) {
-	return m.renderAt(ctx, sites, time.Now())
+// Generate generates the configuration of cfg, which is not stored, with
+// the certificates that are.
+func (m *Manager) Generate(ctx context.Context, cfg *config.Config) ([]byte, error) {
+	certs, err := m.opts.Store.Certs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return m.generator(certs).Generate(ctx, cfg)
 }
 
-// renderAt is render, with the time written into the configuration.
-func (m *Manager) renderAt(ctx context.Context, sites []store.Site, now time.Time) ([]byte, error) {
-	valid := slices.DeleteFunc(slices.Clone(sites), func(s store.Site) bool {
+// generator returns the Generator, finding certificates among certs before
+// asking acme.sh.
+func (m *Manager) generator(certs []store.Cert) *nginx.Generator {
+	gen := *m.opts.Generator
+	gen.Certs = locator{dir: m.opts.CertDir, certs: certs, next: m.opts.Generator.Certs}
+	return &gen
+}
+
+// locator finds certificates kept by the Manager, and then those of next,
+// if not nil.
+type locator struct {
+	dir   certs.Dir
+	certs []store.Cert
+	next  nginx.CertLocator
+}
+
+func (l locator) LocateCert(ctx context.Context, name string) (nginx.Certificate, error) {
+	for _, c := range l.certs {
+		if c.Name == name {
+			return l.dir.Files(c.Name, c.CertPEM, c.KeyPEM), nil
+		}
+	}
+	if l.next != nil {
+		cert, err := l.next.LocateCert(ctx, name)
+		if !errors.Is(err, nginx.ErrCertNotFound) {
+			return cert, err
+		}
+	}
+	return nginx.Certificate{}, fmt.Errorf("%w: there is no certificate named %q", nginx.ErrCertNotFound, name)
+}
+
+// renderAt generates the configuration of the valid sites of st, with the
+// given time written into it.
+func (m *Manager) renderAt(ctx context.Context, st state, now time.Time) ([]byte, error) {
+	valid := slices.DeleteFunc(slices.Clone(st.sites), func(s store.Site) bool {
 		_, err := parse([]store.Site{s})
 		return err != nil
 	})
@@ -393,7 +517,7 @@ func (m *Manager) renderAt(ctx context.Context, sites []store.Site, now time.Tim
 	if err != nil {
 		return nil, err
 	}
-	gen := *m.opts.Generator
+	gen := m.generator(st.certs)
 	gen.Now = func() time.Time { return now }
 	conf, err := gen.Generate(ctx, cfg)
 	if err != nil {
@@ -404,8 +528,9 @@ func (m *Manager) renderAt(ctx context.Context, sites []store.Site, now time.Tim
 	return conf, nil
 }
 
-// checkSite checks site on its own and against the other sites.
-func (m *Manager) checkSite(ctx context.Context, site store.Site, others []store.Site) error {
+// checkSite checks site on its own and against the other sites, with the
+// certificates kept by the Manager.
+func (m *Manager) checkSite(ctx context.Context, site store.Site, others []store.Site, certs []store.Cert) error {
 	cfg, err := parse([]store.Site{site})
 	if err != nil {
 		return err
@@ -419,7 +544,7 @@ func (m *Manager) checkSite(ctx context.Context, site store.Site, others []store
 	}
 	// Generating the site alone finds missing certificates, reported for
 	// servers[0].cert_name.
-	_, err = m.opts.Generator.Generate(ctx, cfg)
+	_, err = m.generator(certs).Generate(ctx, cfg)
 	return err
 }
 
@@ -462,34 +587,4 @@ func parse(sites []store.Site) (*config.Config, error) {
 		return nil, err
 	}
 	return config.Parse(data)
-}
-
-// Certificates returns the certificates that sites can use.
-func (m *Manager) Certificates(ctx context.Context) ([]acme.Cert, error) {
-	if m.opts.CA == nil {
-		return nil, ErrNoCA
-	}
-	return m.opts.CA.Certs(ctx)
-}
-
-// IssueCertificate has acme.sh issue a certificate for domains, validated
-// with the acme.sh DNS API dnsAPI, or over HTTP if dnsAPI is empty. It
-// returns the output of acme.sh, which explains failures.
-func (m *Manager) IssueCertificate(ctx context.Context, domains []string, dnsAPI string) (string, error) {
-	if m.opts.CA == nil {
-		return "", ErrNoCA
-	}
-	req := acme.IssueRequest{Domains: domains, DNS: dnsAPI}
-	if dnsAPI == "" {
-		if m.opts.ACMEWebroot == "" {
-			return "", ErrNoWebroot
-		}
-		req.Webroot = m.opts.ACMEWebroot
-	}
-	if m.opts.Applier != nil {
-		req.RenewHook = m.opts.RenewHook
-	}
-	m.issueMu.Lock()
-	defer m.issueMu.Unlock()
-	return m.opts.CA.Issue(ctx, req)
 }

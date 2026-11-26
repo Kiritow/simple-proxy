@@ -9,7 +9,12 @@ import { SitesPage } from "@/components/sites-page"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/sonner"
-import { useCertificates, useSites, useStatus } from "@/lib/hooks"
+import {
+  useAuthorities,
+  useCertificates,
+  useSites,
+  useStatus,
+} from "@/lib/hooks"
 import { useI18n } from "@/lib/i18n"
 
 type Page = "sites" | "certificates"
@@ -33,6 +38,7 @@ export function App() {
   const sites = useSites()
   const status = useStatus()
   const certs = useCertificates()
+  const authorities = useAuthorities()
   const [statusOpen, setStatusOpen] = useState(false)
 
   const nav = [
@@ -86,7 +92,11 @@ export function App() {
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6">
         {page === "certificates" ? (
-          <CertificatesPage certs={certs} status={status.data} />
+          <CertificatesPage
+            certs={certs}
+            authorities={authorities}
+            status={status.data}
+          />
         ) : (
           <SitesPage
             sites={sites}

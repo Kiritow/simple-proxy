@@ -2,6 +2,7 @@ package web_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/kiritow/simple-proxy/internal/acme"
 	"github.com/kiritow/simple-proxy/internal/apply"
+	"github.com/kiritow/simple-proxy/internal/certs"
+	"github.com/kiritow/simple-proxy/internal/certs/certstest"
 	"github.com/kiritow/simple-proxy/internal/manager"
 	"github.com/kiritow/simple-proxy/internal/nginx"
 	"github.com/kiritow/simple-proxy/internal/store"
@@ -61,7 +64,7 @@ func newHandler(t *testing.T, o options) http.Handler {
 	t.Cleanup(func() { s.Close() })
 
 	gen := &nginx.Generator{}
-	opts := manager.Options{Store: s, Generator: gen}
+	opts := manager.Options{Store: s, Generator: gen, CertDir: certs.Dir(filepath.Join(dir, "certs"))}
 	if o.ca {
 		gen.Certs, opts.CA = fakeCA{}, fakeCA{}
 	}
@@ -79,10 +82,9 @@ func newHandler(t *testing.T, o options) http.Handler {
 		}
 	}
 	return web.NewHandler(web.Options{
-		Manager:   manager.New(opts),
-		Generator: gen,
-		Example:   []byte(example),
-		Logger:    slog.New(slog.DiscardHandler),
+		Manager: manager.New(opts),
+		Example: []byte(example),
+		Logger:  slog.New(slog.DiscardHandler),
 	})
 }
 
@@ -117,7 +119,7 @@ func TestSites(t *testing.T) {
 		{"invalid", "POST", "/api/sites", `{"config": {"server_name": "b;", "default": {"port": 70000}}}`, false, 400,
 			`"fields":[{"field":"servers[0].server_name","message":"invalid name \"b;\"","code":"invalid_name","value":"b;"},{"field":"servers[0].default.port","message":"70000 is not a valid port","code":"invalid_port","value":"70000"}]`},
 		{"domain in use", "POST", "/api/sites", `{"config": {"server_name": "a.example.com", "default": {"port": 1}}}`, false, 400, `"code":"domain_in_use","value":"a.example.com"`},
-		{"missing certificate", "POST", "/api/sites", `{"config": {"server_name": "b.example.com", "https": true, "default": {"port": 1}}}`, false, 422, `"field":"servers[0].cert_name","message":"certificate not found: b.example.com","code":"cert_not_found"`},
+		{"missing certificate", "POST", "/api/sites", `{"config": {"server_name": "b.example.com", "https": true, "default": {"port": 1}}}`, false, 422, `"field":"servers[0].cert_name","message":"certificate not found: there is no certificate named \"b.example.com\"","code":"cert_not_found"`},
 		{"https", "POST", "/api/sites", `{"config": {"server_name": "c.example.com", "cert_name": "*.example.com", "default": {"port": 1}}}`, false, 201, `"cert_name":"*.example.com"`},
 		{"rejected by nginx", "POST", "/api/sites", `{"config": {"server_name": "d.example.com", "options": ["reject_me on"], "default": {"port": 1}}}`, false, 502, `"output":"nginx: [emerg] unknown directive"`},
 		{"unknown schema field", "POST", "/api/sites", `{"config": {"server_name": "d.example.com", "websockets": true}}`, false, 400, "field websockets not found"},
@@ -162,7 +164,7 @@ func TestUpdateAndDelete(t *testing.T) {
 
 func TestCertificates(t *testing.T) {
 	run(t, newHandler(t, options{ca: true, webroot: true}), []step{
-		{"list", "GET", "/api/certificates", "", false, 200, `{"certificates":[{"name":"*.example.com","domains":["*.example.com"],"key_length":"","ca":"ZeroSSL.com","created":"","renew":""}]}`},
+		{"list", "GET", "/api/certificates", "", false, 200, `{"certificates":[{"name":"*.example.com","source":"acme","domains":["*.example.com"],"key":"","issuer":"ZeroSSL.com"}]}`},
 		{"issue over HTTP", "POST", "/api/certificates", `{"domains": ["a.example.com"]}`, false, 201, `{"output":"Cert success."}`},
 		{"issue over DNS", "POST", "/api/certificates", `{"domains": ["*.example.org"], "dns": "dns_cf"}`, false, 201, "Cert success."},
 		{"failure", "POST", "/api/certificates", `{"domains": ["fail.example.com"]}`, false, 502, `"output":"Verify error: 404"`},
@@ -171,10 +173,53 @@ func TestCertificates(t *testing.T) {
 		{"no webroot", "POST", "/api/certificates", `{"domains": ["a.example.com"]}`, false, 400, "ACME webroot"},
 	})
 	run(t, newHandler(t, options{}), []step{
-		{"no acme.sh: list", "GET", "/api/certificates", "", false, 503, "acme.sh is not configured"},
-		{"no acme.sh: issue", "POST", "/api/certificates", `{"domains": ["a.example.com"], "dns": "dns_cf"}`, false, 503, "acme.sh is not configured"},
-		{"status", "GET", "/api/status", "", false, 200, `"applies":false,"certificates":false`},
+		{"no acme.sh: list", "GET", "/api/certificates", "", false, 200, `{"certificates":[]}`},
+		{"no acme.sh: issue", "POST", "/api/certificates", `{"domains": ["a.example.com"], "dns": "dns_cf"}`, false, 503, "acme.sh is not available"},
+		{"status", "GET", "/api/status", "", false, 200, `"applies":false,"acme":false`},
 	})
+}
+
+func TestLocalCertificates(t *testing.T) {
+	caCert, caKey := certstest.CA(t, "Home CA")
+	leafCert, leafKey := certstest.Leaf(t, caCert, caKey, "app.example.com")
+	body := func(v any) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	run(t, newHandler(t, options{applies: true}), []step{
+		{"upload", "POST", "/api/certificates/upload", body(map[string]string{"cert": leafCert, "key": leafKey}), false, 201, `"name":"app.example.com","source":"uploaded","domains":["app.example.com"],"key":"EC P-256","issuer":"Home CA"`},
+		{"upload problems", "POST", "/api/certificates/upload", body(map[string]string{"cert": leafCert}), false, 400, `"fields":[{"field":"key","message":"contains no PEM private key","code":"no_key"}]`},
+		{"listed without keys", "GET", "/api/certificates", "", false, 200, `"source":"uploaded"`},
+		{"site", "POST", "/api/sites", `{"config": {"server_name": "app.example.com", "https": true, "default": {"port": 1}}}`, false, 201, ""},
+		{"in use", "DELETE", "/api/certificates/app.example.com", "", false, 400, `"code":"cert_in_use","value":"app.example.com"`},
+		{"missing", "DELETE", "/api/certificates/nope", "", false, 404, "certificate not found"},
+		{"add CA", "POST", "/api/authorities", body(map[string]string{"cert": caCert, "key": caKey}), false, 201, `"name":"Home CA","subject":"Home CA","issuer":"Home CA","key":"EC P-256"`},
+		{"replace CA", "POST", "/api/authorities", body(map[string]any{"cert": caCert, "key": caKey, "replace": true}), false, 400, "cannot be replaced"},
+		{"sign", "POST", "/api/certificates/sign", `{"authority": "Home CA", "domains": ["nas.lan"], "days": 30, "key_type": "ec"}`, false, 201, `"name":"nas.lan","source":"signed"`},
+		{"sign problems", "POST", "/api/certificates/sign", `{"authority": "Home CA", "domains": ["a b"], "days": 0, "key_type": "ec"}`, false, 400, `"code":"invalid_domain","value":"a b"},{"field":"days"`},
+		{"CAs", "GET", "/api/authorities", "", false, 200, `"signed":1`},
+		{"CA certificate", "GET", "/api/authorities/Home%20CA/cert.pem", "", false, 200, "-----BEGIN CERTIFICATE-----"},
+		{"missing CA certificate", "GET", "/api/authorities/nope/cert.pem", "", false, 404, "CA not found"},
+		{"delete CA", "DELETE", "/api/authorities/Home%20CA", "", false, 204, ""},
+		{"delete signed", "DELETE", "/api/certificates/nas.lan", "", false, 204, ""},
+	})
+	// No response contains a private key.
+	h := newHandler(t, options{})
+	for _, path := range []string{"/api/certificates/upload", "/api/authorities"} {
+		r := httptest.NewRecorder()
+		h.ServeHTTP(r, httptest.NewRequest("POST", path, strings.NewReader(body(map[string]string{"cert": caCert, "key": caKey}))))
+		if strings.Contains(r.Body.String(), "PRIVATE") {
+			t.Errorf("%s answered with a private key: %s", path, r.Body)
+		}
+	}
+	r := httptest.NewRecorder()
+	h.ServeHTTP(r, httptest.NewRequest("GET", "/api/authorities/Home%20CA/cert.pem", nil))
+	if cd := r.Header().Get("Content-Disposition"); cd != `attachment; filename="Home CA.crt"` || strings.Contains(r.Body.String(), "PRIVATE") {
+		t.Errorf("CA certificate: %s, %s", cd, r.Body)
+	}
 }
 
 func TestStatelessAPI(t *testing.T) {

@@ -315,14 +315,14 @@ func (s Server) validate(p *FieldErrors, at string) {
 		p.add(at+".server_name", Required, "")
 	}
 	for _, name := range names {
-		if !isWord(name) {
+		if !IsWord(name) {
 			p.add(at+".server_name", InvalidName, name)
 		}
 	}
 	if s.ListenPort != 0 && !isPort(s.ListenPort) {
 		p.add(at+".listen_port", InvalidPort, strconv.Itoa(s.ListenPort))
 	}
-	if s.CertName != "" && !isWord(s.CertName) {
+	if s.CertName != "" && !IsWord(s.CertName) {
 		p.add(at+".cert_name", InvalidName, s.CertName)
 	}
 	validateDirectives(p, at+".options", s.Options)
@@ -337,7 +337,7 @@ func (l Location) validate(p *FieldErrors, at string) {
 	switch {
 	case l.Path == "":
 		p.add(at+".path", Required, "")
-	case !strings.HasPrefix(l.Path, "/") || !isWord(l.Path):
+	case !strings.HasPrefix(l.Path, "/") || !IsWord(l.Path):
 		p.add(at+".path", InvalidPath, l.Path)
 	}
 	if !isHost(l.IP) {
@@ -400,8 +400,9 @@ func checkArgs(args string) (ProblemCode, string) {
 	return "", ""
 }
 
-// isWord reports whether s can be emitted as a single unquoted nginx token.
-func isWord(s string) bool {
+// IsWord reports whether s can be emitted as a single unquoted nginx token,
+// as server and certificate names must be.
+func IsWord(s string) bool {
 	return s != "" && !strings.ContainsFunc(s, func(r rune) bool {
 		return unicode.IsSpace(r) || unicode.IsControl(r) || strings.ContainsRune(`;{}"'\#`, r)
 	})
