@@ -287,30 +287,9 @@ export function SiteDialog({
                     error={problems.byKey.get(`${key}.server_name`)}
                     autoFocus={!stored}
                   />
-                  <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_9rem]">
-                    <TextField
-                      id={`${root}.ip`}
-                      label={t.site.host}
-                      placeholder={DEFAULT_HOST}
-                      value={site.root.host}
-                      onChange={(e) => patchRoot({ host: e.target.value })}
-                      error={problems.byKey.get(`${root}.ip`)}
-                    />
-                    <TextField
-                      id={`${root}.port`}
-                      label={t.site.port}
-                      type="number"
-                      min={1}
-                      max={65535}
-                      placeholder="3000"
-                      value={site.root.port}
-                      onChange={(e) => patchRoot({ port: e.target.value })}
-                      error={problems.byKey.get(`${root}.port`)}
-                    />
-                  </div>
-                  <RouteToggles
-                    id={root}
-                    route={site.root}
+                  <MainRouteCard
+                    site={site}
+                    problems={problems}
                     onChange={patchRoot}
                   />
                   <ToggleCard
@@ -409,22 +388,13 @@ export function SiteDialog({
                       error={problems.byKey.get(`${root}.path`)}
                     />
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <ToggleCard
-                      id={`${key}.gzip`}
-                      title={t.site.gzip}
-                      description={t.site.gzipText}
-                      checked={site.gzip}
-                      onCheckedChange={(gzip) => patch({ gzip })}
-                    />
-                    <ToggleCard
-                      id={`${root}.enabled`}
-                      title={t.site.mainRoute}
-                      description={t.site.mainRouteText}
-                      checked={site.root.enabled}
-                      onCheckedChange={(enabled) => patchRoot({ enabled })}
-                    />
-                  </div>
+                  <ToggleCard
+                    id={`${key}.gzip`}
+                    title={t.site.gzip}
+                    description={t.site.gzipText}
+                    checked={site.gzip}
+                    onCheckedChange={(gzip) => patch({ gzip })}
+                  />
                   <DirectiveList
                     owner={key}
                     title={t.site.serverDirectives}
@@ -511,6 +481,72 @@ function SaveFailure({ error }: { error: ApiError }) {
         <AlertDescription>{error.message}</AlertDescription>
       )}
     </Alert>
+  )
+}
+
+// MainRouteCard edits the upstream of the main route. While the route is
+// off, its upstream is hidden, unless it has a problem to show. Routes still
+// inherit a hidden upstream, as their cards show.
+function MainRouteCard({
+  site,
+  problems,
+  onChange,
+}: {
+  site: Site
+  problems: Problems
+  onChange: (patch: Partial<Route>) => void
+}) {
+  const { t } = useI18n()
+  const key = routeKey(site, site.root)
+  const error = (field: string) => problems.byKey.get(`${key}.${field}`)
+  const shown = site.root.enabled || !!error("ip") || !!error("port")
+
+  return (
+    <Card size="sm" className={site.root.enabled ? undefined : "bg-muted/30"}>
+      <CardHeader>
+        <CardTitle>
+          <label htmlFor={`${key}.enabled`}>{t.site.mainRoute}</label>
+        </CardTitle>
+        <CardDescription>{t.site.mainRouteText}</CardDescription>
+        <CardAction>
+          <Switch
+            id={`${key}.enabled`}
+            checked={site.root.enabled}
+            onCheckedChange={(enabled) => onChange({ enabled })}
+          />
+        </CardAction>
+      </CardHeader>
+      {shown && (
+        <CardContent>
+          <FieldGroup>
+            <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_9rem]">
+              <TextField
+                id={`${key}.ip`}
+                label={t.site.host}
+                placeholder={DEFAULT_HOST}
+                value={site.root.host}
+                onChange={(e) => onChange({ host: e.target.value })}
+                error={error("ip")}
+              />
+              <TextField
+                id={`${key}.port`}
+                label={t.site.port}
+                type="number"
+                min={1}
+                max={65535}
+                placeholder="3000"
+                value={site.root.port}
+                onChange={(e) => onChange({ port: e.target.value })}
+                error={error("port")}
+              />
+            </div>
+            {site.root.enabled && (
+              <RouteToggles id={key} route={site.root} onChange={onChange} />
+            )}
+          </FieldGroup>
+        </CardContent>
+      )}
+    </Card>
   )
 }
 

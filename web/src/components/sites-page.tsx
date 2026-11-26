@@ -97,7 +97,11 @@ export function SitesPage({
   const q = query.trim().toLowerCase()
   const shown = q
     ? rows.filter(({ site }) =>
-        [site.serverName, upstreamOf(site), ...site.routes.map((r) => r.path)]
+        [
+          site.serverName,
+          upstreamOf(site) ?? "",
+          ...site.routes.map((r) => r.path),
+        ]
           .join(" ")
           .toLowerCase()
           .includes(q)
@@ -319,9 +323,15 @@ export function SitesPage({
                       )}
                     </TableCell>
                     <TableCell className="max-md:hidden">
-                      <div className="font-mono text-xs">
-                        {upstreamOf(site)}
-                      </div>
+                      {site.root.enabled ? (
+                        <div className="font-mono text-xs">
+                          {upstreamOf(site)}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-muted-foreground">
+                          {t.sites.noMainRoute}
+                        </div>
+                      )}
                       {site.routes.length > 0 && (
                         <div className="text-xs text-muted-foreground">
                           {t.sites.routeCount(site.routes.length)}
@@ -424,8 +434,9 @@ function nameOf(site: Site, fallback: string): string {
   return domainsOf(site)[0] ?? fallback
 }
 
-// upstreamOf describes where the main route of site goes.
-function upstreamOf(site: Site): string {
+// upstreamOf describes where the main route of site goes, if it is on.
+function upstreamOf(site: Site): string | undefined {
+  if (!site.root.enabled) return undefined
   const host = site.root.host || DEFAULT_HOST
   const port = site.root.port || "?"
   return `http://${host.includes(":") ? `[${host}]` : host}:${port}`
