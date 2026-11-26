@@ -821,7 +821,7 @@ func describe(err error) errorResponse {
 	}
 	var applyErr *apply.Error
 	if errors.As(err, &applyErr) {
-		resp.Message = applyErr.Step + " failed: " + applyErr.Err.Error()
+		resp.Message = applyErr.Message() // with nginx's reason
 		resp.Output = applyErr.Output
 	}
 

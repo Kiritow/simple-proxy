@@ -168,6 +168,7 @@ func TestSites(t *testing.T) {
 		{"missing certificate", "POST", "/api/sites", `{"config": {"server_name": "b.example.com", "https": true, "default": {"port": 1}}}`, false, 422, `"field":"servers[0].cert_name","message":"certificate not found: there is no certificate named \"b.example.com\"","code":"cert_not_found"`},
 		{"https", "POST", "/api/sites", `{"config": {"server_name": "c.example.com", "cert_name": "*.example.com", "default": {"port": 1}}}`, false, 201, `"cert_name":"*.example.com"`},
 		{"rejected by nginx", "POST", "/api/sites", `{"config": {"server_name": "d.example.com", "options": ["reject_me on"], "default": {"port": 1}}}`, false, 502, `"output":"nginx: [emerg] unknown directive"`},
+		{"nginx's reason", "POST", "/api/sites", `{"config": {"server_name": "d.example.com", "options": ["reject_me on"], "default": {"port": 1}}}`, false, 502, `"message":"test failed: unknown directive"`},
 		{"unknown schema field", "POST", "/api/sites", `{"config": {"server_name": "d.example.com", "websockets": true}}`, false, 400, "field websockets not found"},
 		{"not an object", "POST", "/api/sites", `{"config": []}`, false, 400, "config must be a JSON object"},
 		{"unknown request field", "POST", "/api/sites", `{"conf": {}}`, false, 400, "unknown field"},

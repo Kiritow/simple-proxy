@@ -782,7 +782,18 @@ function SaveFailure({ error }: { error: ApiError }) {
         <AlertTitle>{t.site.applyFailed}</AlertTitle>
         <AlertDescription className="gap-2">
           <p>{t.site.applyFailedText}</p>
-          <Output>{error.output || error.message}</Output>
+          {/* The message has nginx's reason, and the output all it said. */}
+          <p className="font-medium break-words text-foreground">
+            {error.message}
+          </p>
+          {error.output && (
+            <details>
+              <summary className="cursor-pointer text-xs select-none hover:text-foreground">
+                {t.site.nginxOutput}
+              </summary>
+              <Output>{error.output}</Output>
+            </details>
+          )}
         </AlertDescription>
       </Alert>
     )

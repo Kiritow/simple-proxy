@@ -78,6 +78,47 @@ func TestApplyRestoresAfterFailedTest(t *testing.T) {
 	}
 }
 
+// realNginx fails like nginx -t: it prints the error to its log on stderr
+// and as a summary, pointing at line 2 of the file, which nginx may see at
+// another path, e.g. in a container.
+const realNginx = `msg='unknown directive "bad" in /etc/nginx/conf.d/proxy.conf:2'
+echo "2026/11/26 18:59:16 [warn] 183#183: the \"listen ... http2\" directive is deprecated" >&2
+echo "2026/11/26 18:59:16 [emerg] 183#183: $msg" >&2
+echo "nginx: [emerg] $msg" >&2
+echo "nginx: configuration file /etc/nginx/nginx.conf test failed" >&2
+exit 1`
+
+func TestErrorMessage(t *testing.T) {
+	a, _ := newApplier(t, nil)
+	a.Test = []string{"sh", "-c", realNginx}
+	err := a.Apply(t.Context(), []byte("server {\n    bad on;\n}\n"))
+	var aerr *apply.Error
+	if !errors.As(err, &aerr) {
+		t.Fatalf("Apply error = %v, want an *apply.Error", err)
+	}
+	want := `test failed: unknown directive "bad" in /etc/nginx/conf.d/proxy.conf:2 (bad on;)`
+	if got := aerr.Message(); got != want {
+		t.Errorf("Message() = %q\nwant        %q", got, want)
+	}
+	if !strings.Contains(aerr.Output, "test failed") {
+		t.Errorf("Output = %q, want all of nginx's output", aerr.Output)
+	}
+
+	// Without messages of nginx, the output tells, or else the error.
+	for _, c := range []struct {
+		output, want string
+	}{
+		{"Error: no container with name or ID \"nginx\" found\nmore", `reload failed: Error: no container with name or ID "nginx" found`},
+		{"", "reload failed: podman exec nginx nginx -s reload: exit status 125"},
+		{"nginx: [error] open() \"/run/nginx.pid\" failed (2: No such file or directory)", `reload failed: open() "/run/nginx.pid" failed (2: No such file or directory)`},
+	} {
+		e := &apply.Error{Step: "reload", Output: c.output, Err: errors.New("podman exec nginx nginx -s reload: exit status 125")}
+		if got := e.Message(); got != c.want {
+			t.Errorf("Message() with output %q = %q, want %q", c.output, got, c.want)
+		}
+	}
+}
+
 func TestApplyRemovesNewFileAfterFailedTest(t *testing.T) {
 	a, path := newApplier(t, nil)
 	if err := a.Apply(t.Context(), []byte("bad")); err == nil {

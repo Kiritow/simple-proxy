@@ -149,7 +149,7 @@ func (m *Manager) applied(err error) {
 	m.status.Error, m.status.Output = err.Error(), ""
 	var aerr *apply.Error
 	if errors.As(err, &aerr) {
-		m.status.Error = fmt.Sprintf("%s failed: %v", aerr.Step, aerr.Err)
+		m.status.Error = aerr.Message()
 		m.status.Output = aerr.Output
 	}
 }
