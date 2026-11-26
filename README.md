@@ -195,6 +195,10 @@ claude mcp add --transport http simple-proxy http://127.0.0.1:8081/mcp \
   --header "Authorization: Bearer sp_..."
 ```
 
+The console's MCP page explains it step by step: the setup of Claude Code,
+Cursor, VS Code, Claude Desktop (through `mcp-remote`) and other clients,
+examples of what to ask, and the tools that assistants acting as you get.
+
 The assistant may do exactly what the token's user may do in the console:
 its tools make the same API requests, which are checked the same way, and
 it only gets the tools that the user's role allows.

@@ -1,8 +1,6 @@
 import { useState, type FormEvent } from "react"
 import {
-  Check,
   CircleAlert,
-  Copy,
   KeyRound,
   Plus,
   RotateCw,
@@ -11,8 +9,8 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { CodeBlock } from "@/components/code-view"
 import { ConfirmButton, IconButton, TextField } from "@/components/form"
+import { McpSetup, Snippet } from "@/components/mcp-setup"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -26,7 +24,6 @@ import {
 } from "@/components/ui/dialog"
 import {
   Field,
-  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
@@ -44,7 +41,6 @@ import { Spinner } from "@/components/ui/spinner"
 import {
   api,
   consoleUrl,
-  copyText,
   errorOf,
   mcpUrl,
   type ApiError,
@@ -80,7 +76,7 @@ export function TokensDialog({
           <DialogDescription>{t.tokens.description}</DialogDescription>
         </DialogHeader>
         {created ? (
-          <CreatedToken created={created} />
+          <CreatedToken created={created} onHelp={() => onOpenChange(false)} />
         ) : (
           <div className="flex min-w-0 flex-col gap-6">
             <TokenList
@@ -309,24 +305,17 @@ function CreateForm({
 }
 
 // CreatedToken shows the secret of a token just created, once, with how to
-// use it for MCP clients and the HTTP API.
-function CreatedToken({ created }: { created: NewApiToken }) {
+// use it for MCP clients and the HTTP API. onHelp is called when following
+// the link to the page about MCP.
+function CreatedToken({
+  created,
+  onHelp,
+}: {
+  created: NewApiToken
+  onHelp: () => void
+}) {
   const { t } = useI18n()
   const { secret } = created
-  const url = mcpUrl()
-  const mcpConfig = JSON.stringify(
-    {
-      mcpServers: {
-        "simple-proxy": {
-          type: "http",
-          url,
-          headers: { Authorization: `Bearer ${secret}` },
-        },
-      },
-    },
-    null,
-    2
-  )
 
   return (
     <div className="flex min-w-0 flex-col gap-5">
@@ -338,52 +327,19 @@ function CreatedToken({ created }: { created: NewApiToken }) {
       <Snippet title={t.tokens.secret} text={secret} />
       <FieldSet className="min-w-0 gap-4">
         <FieldLegend>{t.tokens.setupTitle}</FieldLegend>
-        <Snippet
-          title={t.tokens.claudeCode}
-          text={`claude mcp add --transport http simple-proxy ${url} --header "Authorization: Bearer ${secret}"`}
-        />
-        <Snippet
-          title={t.tokens.mcpClients}
-          description={t.tokens.mcpClientsText(url)}
-          text={mcpConfig}
-        />
+        <McpSetup url={mcpUrl()} token={secret} />
         <Snippet
           title={t.tokens.httpApi}
           text={`curl -H "Authorization: Bearer ${secret}" ${consoleUrl()}api/sites`}
         />
+        <a
+          href="#/mcp"
+          onClick={onHelp}
+          className="w-fit text-sm font-medium underline-offset-4 hover:underline"
+        >
+          {t.tokens.moreHelp}
+        </a>
       </FieldSet>
     </div>
-  )
-}
-
-// Snippet shows text to copy, such as a command, with a button copying it.
-function Snippet({
-  title,
-  description,
-  text,
-}: {
-  title: string
-  description?: string
-  text: string
-}) {
-  const { t } = useI18n()
-  const [copied, setCopied] = useState(false)
-  const copy = async () => {
-    await copyText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }
-  return (
-    <Field className="min-w-0 gap-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium">{title}</span>
-        <Button variant="ghost" size="sm" onClick={() => void copy()}>
-          {copied ? <Check /> : <Copy />}
-          {copied ? t.app.copied : t.app.copy}
-        </Button>
-      </div>
-      {description && <FieldDescription>{description}</FieldDescription>}
-      <CodeBlock>{text}</CodeBlock>
-    </Field>
   )
 }

@@ -9,6 +9,7 @@ export const en = {
     certificates: "Certificates",
     users: "Users",
     history: "History",
+    mcp: "MCP",
     language: "Language",
     followBrowser: "Browser language",
     toggleTheme: "Toggle dark mode",
@@ -557,12 +558,91 @@ export const en = {
       "Copy the token now: it is not shown again. Anyone with it can act as you.",
     secret: "Token",
     setupTitle: "Use it",
-    claudeCode: "Claude Code",
-    mcpClients: "Other MCP clients",
-    mcpClientsText: (url: string) =>
-      `The MCP endpoint is ${url}, over Streamable HTTP.`,
     httpApi: "HTTP API",
+    moreHelp: "More about AI assistants (MCP): examples and your tools",
     done: "Done",
+  },
+  mcp: {
+    title: "AI assistants (MCP)",
+    description:
+      "Let AI assistants such as Claude Code manage the sites for you, over the Model Context Protocol (MCP).",
+    asYouTitle: "They act as you",
+    asYou: (role: string) =>
+      `With your permissions, as ${role}: an assistant may do exactly what you may do here, checked the same way, and has no tools for anything else.`,
+    appliedTitle: "Changes apply right away",
+    applied:
+      "Like yours, its changes are applied to nginx at once, and kept as versions by you. If nginx rejects one, nothing changes, and the assistant gets nginx's reason.",
+    tokensTitle: "With an API token",
+    tokens:
+      "An assistant signs in with an API token of yours. Treat tokens like passwords: give each assistant its own, and revoke those you no longer use.",
+    step1Title: "1. Create an API token",
+    step1Text:
+      "Create one for each assistant or machine, so that you can revoke it on its own. Its secret is shown once, with the setups below filled in.",
+    openTokens: "API tokens",
+    step2Title: "2. Connect your assistant",
+    step2Text: (token: string) =>
+      `Set it up for the endpoint below, replacing ${token} with your token.`,
+    endpoint: "MCP endpoint",
+    endpointText:
+      "Over the Streamable HTTP transport, with the header Authorization: Bearer and your token.",
+    clients: {
+      "claude-code": "Claude Code",
+      cursor: "Cursor",
+      vscode: "VS Code",
+      "claude-desktop": "Claude Desktop",
+      other: "Other clients",
+    },
+    clientNotes: {
+      "claude-code":
+        "Run this in a terminal. It adds the server to the current project; add --scope user to have it in all your projects.",
+      cursor:
+        "Add this to Cursor's MCP servers for all your projects, or to .cursor/mcp.json in a project.",
+      vscode:
+        "Add this to .vscode/mcp.json in a project, and use the tools in Copilot's agent mode.",
+      "claude-desktop":
+        "Claude Desktop runs local MCP servers from its configuration file (Settings → Developer → Edit Config): mcp-remote, which npx runs and which needs Node.js, connects it to the endpoint. Restart Claude Desktop afterwards.",
+      other:
+        "Most clients that connect to remote MCP servers take the endpoint and the header in a configuration like this one.",
+    },
+    run: "Run",
+    addTo: (file: string) => `Add to ${file}`,
+    allowHttp:
+      "The endpoint is plain HTTP on another machine, so mcp-remote needs --allow-http, and anyone on the network in between could read the token. Do this only on a network you trust, or serve the console over HTTPS.",
+    step3Title: "3. Ask in your own words",
+    step3Text: "The assistant picks the tools. For example:",
+    examples: {
+      sites: {
+        list: "List my sites, and tell me which are turned off.",
+        show: "Show me the nginx configuration of app.example.com.",
+        route:
+          "On app.example.com, forward /api to port 8080 with WebSocket. Show me the change before saving it.",
+        off: "Turn off staging.example.com.",
+      },
+      allSites: {
+        add: "Add a site for shop.example.com that forwards to 10.0.0.5:3000 over HTTPS.",
+        status: "Is nginx running the stored sites? If not, why?",
+      },
+      certificates: {
+        expiring: "Which certificates expire within 30 days?",
+        issue:
+          "Request a certificate for shop.example.com, and have its site use it.",
+      },
+    },
+    tips: {
+      preview:
+        "Assistants check a change with preview_site before saving it, and save it based on the site's generation: if someone else changed the site meanwhile, saving fails rather than overwriting their change.",
+      review:
+        "To review changes first, ask the assistant to show them to you before saving.",
+      restricted:
+        "As in the console, your assistant cannot change the raw configuration or the extra directives of your sites.",
+    },
+    toolsTitle: "Your assistant's tools",
+    toolsText:
+      "What an assistant acting as you can do: the tools the MCP endpoint offers you now. Their descriptions are written for the assistant.",
+    toolsFailed: "The tools could not be loaded",
+    readOnly: "Reads",
+    changes: "Changes",
+    destructive: "Replaces or deletes",
   },
   noAccess: {
     title: "No access yet",

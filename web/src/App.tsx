@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react"
 import {
+  Bot,
   Globe,
   History,
   LogOut,
@@ -16,6 +17,7 @@ import { AuthProvider } from "@/components/auth-provider"
 import { CertificatesPage } from "@/components/certificates-page"
 import { HistoryPage } from "@/components/history-page"
 import { LanguageMenu } from "@/components/language-menu"
+import { McpPage } from "@/components/mcp-page"
 import { StatusButton, StatusDialog } from "@/components/nginx-status"
 import { SitesPage } from "@/components/sites-page"
 import { ThemeToggle } from "@/components/theme-toggle"
@@ -40,7 +42,7 @@ import type { Status } from "@/lib/api"
 import { displayName, useAuth } from "@/lib/auth"
 import { useI18n } from "@/lib/i18n"
 
-const pages = ["sites", "certificates", "users", "history"] as const
+const pages = ["sites", "certificates", "users", "history", "mcp"] as const
 
 type Page = (typeof pages)[number]
 
@@ -85,6 +87,7 @@ function Pages() {
     certificates: true,
     users: permissions.users,
     history: permissions.history,
+    mcp: true,
   }
   const page = allowed[requested] ? requested : "sites"
   const sites = useSites()
@@ -121,6 +124,7 @@ function Pages() {
           } as const,
         ]
       : []),
+    { page: "mcp", href: "#/mcp", label: t.app.mcp, icon: Bot },
   ] as const
 
   return (
@@ -151,7 +155,9 @@ function Pages() {
       }
       status={status.data}
     >
-      {page === "history" ? (
+      {page === "mcp" ? (
+        <McpPage />
+      ) : page === "history" ? (
         <HistoryPage />
       ) : page === "users" ? (
         <UsersPage sites={sites} />

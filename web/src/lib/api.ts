@@ -294,6 +294,24 @@ export function mcpUrl(): string {
   return new URL("mcp", consoleUrl()).href
 }
 
+// McpTool is a tool that the MCP endpoint offers the signed-in account,
+// as MCP's tools/list describes it.
+export type McpTool = {
+  name: string
+  description?: string
+  annotations?: {
+    title?: string
+    readOnlyHint?: boolean
+    destructiveHint?: boolean
+  }
+}
+
+// McpReply is a JSON-RPC response of the MCP endpoint.
+type McpReply<T> = {
+  result?: T
+  error?: { code: number; message: string }
+}
+
 // NewUser is a password account to add.
 export type NewUser = {
   username: string
@@ -329,7 +347,7 @@ async function request<T>(
   path: string,
   init: RequestInit & { json?: unknown } = {}
 ): Promise<T> {
-  const { json, ...rest } = init
+  const { json, headers, ...rest } = init
   let res: Response
   try {
     res = await fetch(path, {
@@ -337,6 +355,7 @@ async function request<T>(
       headers: {
         Accept: "application/json",
         ...(json !== undefined && { "Content-Type": "application/json" }),
+        ...(headers as Record<string, string> | undefined),
       },
       body: json !== undefined ? JSON.stringify(json) : rest.body,
     })
@@ -550,6 +569,26 @@ export const api = {
   deleteToken: (id: string) =>
     request<void>(`api/auth/tokens/${encodeURIComponent(id)}`, {
       method: "DELETE",
+    }),
+  // mcpTools asks the MCP endpoint, with the session, for the tools that
+  // AI assistants of the signed-in account get.
+  mcpTools: () =>
+    request<McpReply<{ tools: McpTool[] }>>("mcp", {
+      method: "POST",
+      headers: {
+        Accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2025-06-18",
+      },
+      json: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+    }).then((r) => {
+      if (r.error || !r.result) {
+        throw new RequestError({
+          status: 0,
+          message: r.error?.message ?? "no tools",
+          fields: [],
+        })
+      }
+      return r.result.tools
     }),
 
   validate: (config: ConfigJSON, signal?: AbortSignal) =>

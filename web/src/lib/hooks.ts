@@ -5,6 +5,7 @@ import {
   errorOf,
   type ApiError,
   type ApiToken,
+  type McpTool,
   type Authority,
   type AuthorityDetails,
   type CertificateDetails,
@@ -77,6 +78,10 @@ export const useSettings = (): Resource<Settings> => useResource(api.settings)
 
 // useTokens loads the API tokens of the signed-in account.
 export const useTokens = (): Resource<ApiToken[]> => useResource(api.tokens)
+
+// useMcpTools loads the tools that AI assistants of the signed-in account
+// get over MCP.
+export const useMcpTools = (): Resource<McpTool[]> => useResource(api.mcpTools)
 
 // loadVersionStats counts the versions by the browser's calendar days.
 const loadVersionStats = () => api.versionStats(-new Date().getTimezoneOffset())

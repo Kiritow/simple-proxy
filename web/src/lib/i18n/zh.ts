@@ -11,6 +11,7 @@ export const zh: Messages = {
     certificates: "证书",
     users: "用户",
     history: "历史版本",
+    mcp: "MCP",
     language: "语言",
     followBrowser: "跟随浏览器",
     toggleTheme: "切换深色模式",
@@ -520,11 +521,89 @@ export const zh: Messages = {
       "请立即复制令牌：它不会再次显示。任何持有它的人都可以以你的身份操作。",
     secret: "令牌",
     setupTitle: "使用方法",
-    claudeCode: "Claude Code",
-    mcpClients: "其他 MCP 客户端",
-    mcpClientsText: (url) => `MCP 端点是 ${url}，使用 Streamable HTTP 传输。`,
     httpApi: "HTTP API",
+    moreHelp: "了解更多 AI 助手（MCP）的用法：示例和可用工具",
     done: "完成",
+  },
+  mcp: {
+    title: "AI 助手（MCP）",
+    description:
+      "通过模型上下文协议（MCP），让 Claude Code 等 AI 助手替你管理站点。",
+    asYouTitle: "以你的身份操作",
+    asYou: (role) =>
+      `拥有你作为${role}的权限：AI 助手能做的和你在这里能做的完全一样，检查方式也相同；超出范围的操作根本没有对应的工具。`,
+    appliedTitle: "修改立即生效",
+    applied:
+      "和你的修改一样，它的修改会立即应用到 nginx，并以你的名义保存为版本。如果 nginx 拒绝了某个修改，则不会有任何改变，AI 助手会收到 nginx 给出的原因。",
+    tokensTitle: "使用 API 令牌",
+    tokens:
+      "AI 助手用你的 API 令牌登录。请像对待密码一样对待令牌：每个助手使用单独的令牌，不再使用的及时撤销。",
+    step1Title: "1. 创建 API 令牌",
+    step1Text:
+      "为每个助手或每台机器各创建一个，以便单独撤销。令牌只显示一次，届时下面的配置会自动填好令牌。",
+    openTokens: "API 令牌",
+    step2Title: "2. 连接你的 AI 助手",
+    step2Text: (token) =>
+      `按下面的方式配置 MCP 端点，并将 ${token} 替换为你的令牌。`,
+    endpoint: "MCP 端点",
+    endpointText:
+      "使用 Streamable HTTP 传输，请求头为 Authorization: Bearer 加上你的令牌。",
+    clients: {
+      "claude-code": "Claude Code",
+      cursor: "Cursor",
+      vscode: "VS Code",
+      "claude-desktop": "Claude Desktop",
+      other: "其他客户端",
+    },
+    clientNotes: {
+      "claude-code":
+        "在终端中运行。默认只添加到当前项目；加上 --scope user 可在你的所有项目中使用。",
+      cursor:
+        "添加到 Cursor 的 MCP 服务器配置中，对所有项目生效；或添加到某个项目的 .cursor/mcp.json。",
+      vscode:
+        "添加到项目的 .vscode/mcp.json，然后在 Copilot 的智能体（Agent）模式中使用这些工具。",
+      "claude-desktop":
+        "Claude Desktop 从配置文件（设置 → 开发者 → 编辑配置）启动本地 MCP 服务器：由 npx 运行的 mcp-remote（需要 Node.js）将它连接到 MCP 端点。修改后请重启 Claude Desktop。",
+      other:
+        "大多数支持远程 MCP 服务器的客户端，都接受类似这样的端点和请求头配置。",
+    },
+    run: "运行",
+    addTo: (file) => `添加到 ${file}`,
+    allowHttp:
+      "MCP 端点是另一台机器上的普通 HTTP，因此 mcp-remote 需要 --allow-http，而且网络中间的任何人都可能读取到令牌。请只在可信的网络中这样使用，或为控制台配置 HTTPS。",
+    step3Title: "3. 用自然语言提出需求",
+    step3Text: "AI 助手会自己选择工具。例如：",
+    examples: {
+      sites: {
+        list: "列出我的站点，告诉我哪些处于停用状态。",
+        show: "给我看 app.example.com 的 nginx 配置。",
+        route:
+          "在 app.example.com 上把 /api 转发到 8080 端口，并开启 WebSocket。保存前先给我看看改动。",
+        off: "停用 staging.example.com。",
+      },
+      allSites: {
+        add: "为 shop.example.com 添加一个站点，通过 HTTPS 转发到 10.0.0.5:3000。",
+        status: "nginx 正在运行已保存的站点吗？如果没有，原因是什么？",
+      },
+      certificates: {
+        expiring: "哪些证书会在 30 天内过期？",
+        issue: "为 shop.example.com 申请证书，并让它的站点使用这张证书。",
+      },
+    },
+    tips: {
+      preview:
+        "AI 助手会先用 preview_site 检查改动再保存，并基于站点的版本号（generation）保存：如果期间有人修改了站点，保存会失败，而不会覆盖别人的修改。",
+      review: "如果想先审阅改动，请让 AI 助手在保存前给你看。",
+      restricted:
+        "和在控制台中一样，你的 AI 助手不能修改站点的原始配置和额外指令。",
+    },
+    toolsTitle: "你的 AI 助手可用的工具",
+    toolsText:
+      "以你的身份操作的 AI 助手能做什么，即 MCP 端点当前为你提供的工具。工具说明是写给 AI 助手看的。",
+    toolsFailed: "无法加载工具列表",
+    readOnly: "只读",
+    changes: "修改",
+    destructive: "替换或删除",
   },
   noAccess: {
     title: "暂无权限",
