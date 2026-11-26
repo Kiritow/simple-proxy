@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react"
 import {
   Globe,
+  History,
   LogOut,
   RotateCw,
   ShieldCheck,
@@ -13,6 +14,7 @@ import { cn } from "cn"
 import { AccountMenu } from "@/components/account-menu"
 import { AuthProvider } from "@/components/auth-provider"
 import { CertificatesPage } from "@/components/certificates-page"
+import { HistoryPage } from "@/components/history-page"
 import { LanguageMenu } from "@/components/language-menu"
 import { StatusButton, StatusDialog } from "@/components/nginx-status"
 import { SitesPage } from "@/components/sites-page"
@@ -38,16 +40,14 @@ import type { Status } from "@/lib/api"
 import { displayName, useAuth } from "@/lib/auth"
 import { useI18n } from "@/lib/i18n"
 
-type Page = "sites" | "certificates" | "users"
+const pages = ["sites", "certificates", "users", "history"] as const
+
+type Page = (typeof pages)[number]
 
 // usePage follows the page named in the URL's fragment, e.g. #/certificates.
 function usePage(): Page {
   const read = (): Page =>
-    location.hash === "#/certificates"
-      ? "certificates"
-      : location.hash === "#/users"
-        ? "users"
-        : "sites"
+    pages.find((p) => location.hash === `#/${p}`) ?? "sites"
   const [page, setPage] = useState(read)
   useEffect(() => {
     const update = () => setPage(read())
@@ -80,7 +80,13 @@ function Pages() {
   const { me } = useAuth()
   const permissions = me.permissions
   const requested = usePage()
-  const page = requested === "users" && !permissions.users ? "sites" : requested
+  const allowed: Record<Page, boolean> = {
+    sites: true,
+    certificates: true,
+    users: permissions.users,
+    history: permissions.history,
+  }
+  const page = allowed[requested] ? requested : "sites"
   const sites = useSites()
   const status = useStatus()
   const certs = useCertificates()
@@ -102,6 +108,16 @@ function Pages() {
             href: "#/users",
             label: t.app.users,
             icon: Users,
+          } as const,
+        ]
+      : []),
+    ...(permissions.history
+      ? [
+          {
+            page: "history",
+            href: "#/history",
+            label: t.app.history,
+            icon: History,
           } as const,
         ]
       : []),
@@ -135,7 +151,9 @@ function Pages() {
       }
       status={status.data}
     >
-      {page === "users" ? (
+      {page === "history" ? (
+        <HistoryPage />
+      ) : page === "users" ? (
         <UsersPage sites={sites} />
       ) : page === "certificates" ? (
         <CertificatesPage

@@ -56,9 +56,23 @@ type Permissions struct {
 	Certificates bool `json:"certificates"`
 	// Users allows managing the users and the settings.
 	Users bool `json:"users"`
+	// History allows seeing statistics of the versions of sites, and
+	// clearing old ones: for super administrators only, see
+	// Service.Permissions.
+	History bool `json:"history"`
 }
 
-// PermissionsOf returns what role allows.
+// Permissions returns what u may do: what their role allows, and History
+// for super administrators, or for all administrators if the configuration
+// lists no super administrators.
+func (s *Service) Permissions(u store.User) Permissions {
+	p := PermissionsOf(u.Role)
+	p.History = u.Role == store.Admin && (u.Managed || len(s.cfg.Admins) == 0)
+	return p
+}
+
+// PermissionsOf returns what role allows; Service.Permissions adds what
+// depends on the user.
 func PermissionsOf(role store.Role) Permissions {
 	switch role {
 	case store.Admin:

@@ -88,7 +88,7 @@ func TestSignIn(t *testing.T) {
 	}
 	admin.want("GET", "/api/auth/me", "", 200,
 		`"username":"admin"`, `"role":"admin"`, `"managed":true`, `"password_managed":true`, `"method":"password"`,
-		`"permissions":{"sites":true,"all_sites":true,"certificates":true,"users":true}`)
+		`"permissions":{"sites":true,"all_sites":true,"certificates":true,"users":true,"history":true}`)
 	admin.want("GET", "/api/sites", "", 200, `{"sites":[]}`)
 
 	// Signing out ends the session.
@@ -140,13 +140,13 @@ func TestRoles(t *testing.T) {
 	}
 
 	nobody := as(t, h, "nobody", "nobody-password")
-	nobody.want("GET", "/api/auth/me", "", 200, `"role":""`, `"permissions":{"sites":false,"all_sites":false,"certificates":false,"users":false}`)
+	nobody.want("GET", "/api/auth/me", "", 200, `"role":""`, `"permissions":{"sites":false,"all_sites":false,"certificates":false,"users":false,"history":false}`)
 	nobody.want("GET", "/api/sites", "", 403, `"code":"forbidden"`)
 	nobody.want("GET", "/api/status", "", 403)
 	nobody.want("GET", "/api/certificates", "", 403)
 
 	site := as(t, h, "site", "site-password")
-	site.want("GET", "/api/auth/me", "", 200, `"sites":["`+a+`"]`, `"permissions":{"sites":true,"all_sites":false,"certificates":false,"users":false}`)
+	site.want("GET", "/api/auth/me", "", 200, `"sites":["`+a+`"]`, `"permissions":{"sites":true,"all_sites":false,"certificates":false,"users":false,"history":false}`)
 	site.want("GET", "/api/sites", "", 200, "a.example.com")
 	site.lacks("GET", "/api/sites", "", "b.example.com")
 	site.want("PUT", "/api/sites/"+a, `{"config": {"server_name": "a.example.com", "default": {"port": 10}}, "generation": 1}`, 200)

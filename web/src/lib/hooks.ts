@@ -15,6 +15,7 @@ import {
   type Status,
   type StoredSite,
   type User,
+  type VersionStats,
 } from "@/lib/api"
 import { resolveField, serialize, type Site } from "@/lib/model"
 
@@ -72,6 +73,12 @@ export const useAuthorities = (): Resource<Authority[]> =>
 export const useUsers = (): Resource<User[]> => useResource(api.users)
 
 export const useSettings = (): Resource<Settings> => useResource(api.settings)
+
+// loadVersionStats counts the versions by the browser's calendar days.
+const loadVersionStats = () => api.versionStats(-new Date().getTimezoneOffset())
+
+export const useVersionStats = (): Resource<VersionStats> =>
+  useResource(loadVersionStats)
 
 // useCertificateDetails loads the details of the certificate of the given
 // name, again when the name changes.

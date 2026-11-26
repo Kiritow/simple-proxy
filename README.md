@@ -169,6 +169,20 @@ addresses, use any certificate or write files, beyond their sites. Platform
 operators can, so give that role to people trusted with nginx's
 configuration.
 
+### Versions of sites
+
+Every change of a site that nginx accepted is kept as a version in the
+database: adding it, changing it (also turning it on or off, or renaming the
+certificate it uses), and deleting it, with its configuration, who made the
+change and when. Importing sites deletes all of them and adds the imported
+ones. Sites stored before versions were kept start with an initial version.
+
+Super administrators see on the History page how many versions there are,
+and how much space they take, by the day they were made, and clear those made
+before a day. The latest version of each site is never cleared, as it is the
+site's current configuration. Without super administrators in the
+configuration file, all administrators can.
+
 ### How changes are applied
 
 On every change, and once on startup, the configuration of all enabled sites
@@ -385,6 +399,8 @@ preview their own sites.
 | `PATCH /api/users/{id}`   | Change one: any of `display_name`, `email`, `role`, `sites`, `disabled` and `password`. |
 | `DELETE /api/users/{id}`  | Delete one. |
 | `GET /api/settings`, `PUT` | Administrators: `{"registration": true}`, whether new accounts may sign up. |
+| `GET /api/versions/stats?offset=480` | Super administrators: the [versions of sites](#versions-of-sites), `{"versions": 12, "purgeable": 9, "bytes": 3456, "sites": 4, "oldest": "...", "newest": "...", "days": [{"date": "2026-11-27", "versions": 5, "purgeable": 4, "bytes": 1234, "created": 1, "updated": 3, "deleted": 1, "initial": 0}]}`, by day at the UTC offset in minutes. |
+| `POST /api/versions/purge` | Super administrators: delete the versions made before `{"before": "2026-11-01T00:00:00+08:00"}`, but each site's latest one: `{"deleted": 9}`. |
 | `GET /api/sites`          | `{"sites": [{"id": "...", "config": {...}, "generation": 1}]}` |
 | `POST /api/sites`         | Add a site: `{"config": {...}}`. |
 | `PUT /api/sites/{id}`     | Change a site: `{"config": {...}, "generation": 1}`. |

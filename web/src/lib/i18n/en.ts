@@ -8,6 +8,7 @@ export const en = {
     sites: "Sites",
     certificates: "Certificates",
     users: "Users",
+    history: "History",
     language: "Language",
     followBrowser: "Browser language",
     toggleTheme: "Toggle dark mode",
@@ -614,6 +615,56 @@ export const en = {
     created: (name: string) => `Added ${name}`,
     saved: (name: string) => `Saved ${name}`,
     failed: "The user could not be saved",
+  },
+  history: {
+    title: "History",
+    description:
+      "Every successful change of a site is kept as a version. Clearing old versions always keeps the current one of each site.",
+    loadFailed: "The history could not be loaded",
+    emptyTitle: "No versions yet",
+    emptyText:
+      "From now on, a version is kept whenever a site is added, changed or deleted.",
+    versions: "Versions",
+    sitesCount: (n: number) => `Of ${n} ${n === 1 ? "site" : "sites"}`,
+    purgeable: "Can be cleared",
+    purgeableText: "All but the current version of each site",
+    size: "Size",
+    sizeText: "Of the configurations kept",
+    since: "Kept since",
+    newest: (ago: string) => `Newest version ${ago}`,
+    grouping: "Count by",
+    byDay: "Day",
+    byMonth: "Month",
+    tooManyDays: "Too many days to show one by one",
+    perDay: "Versions created per day",
+    perMonth: "Versions created per month",
+    chartText:
+      "Hover over a column, or focus the chart and use the arrow keys, for the details.",
+    chartLabel: "Versions created over time; use the arrow keys to read them",
+    date: "Date",
+    month: "Month",
+    created: "Added",
+    updated: "Changed",
+    deleted: "Deleted",
+    initial: "Initial",
+    initialText: "The configurations the sites had when versions began",
+    versionsCount: (n: number) => `${n} ${n === 1 ? "version" : "versions"}`,
+    clearTitle: "Clear old versions",
+    clearText:
+      "Deletes the versions created before the chosen day, for good. The current version of each site is always kept.",
+    clearBefore: "Created before",
+    pickDay: "Choose a day.",
+    clearCount: (n: number, day: string) =>
+      n === 0
+        ? `Nothing to clear before ${day}.`
+        : `${n} ${n === 1 ? "version" : "versions"} created before ${day} will be deleted.`,
+    clear: "Clear",
+    clearConfirmTitle: (n: number) =>
+      `Clear ${n} ${n === 1 ? "version" : "versions"}?`,
+    clearConfirmText: (day: string) =>
+      `The versions created before ${day} are deleted for good. The current version of each site is kept.`,
+    cleared: (n: number) => `Deleted ${n} ${n === 1 ? "version" : "versions"}`,
+    clearFailed: "The versions could not be cleared",
   },
   // Problems reported by the server, by code (see config.ProblemCode).
   problems: {

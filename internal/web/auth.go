@@ -18,12 +18,13 @@ import (
 type access int
 
 const (
-	public      access = iota // nothing
-	account                   // being signed in, whatever the role
-	sitesAccess               // auth.Permissions.Sites
-	allSites                  // auth.Permissions.AllSites
-	certsAccess               // auth.Permissions.Certificates
-	usersAccess               // auth.Permissions.Users
+	public        access = iota // nothing
+	account                     // being signed in, whatever the role
+	sitesAccess                 // auth.Permissions.Sites
+	allSites                    // auth.Permissions.AllSites
+	certsAccess                 // auth.Permissions.Certificates
+	usersAccess                 // auth.Permissions.Users
+	historyAccess               // auth.Permissions.History
 )
 
 func (a access) allowedBy(p auth.Permissions) bool {
@@ -36,6 +37,8 @@ func (a access) allowedBy(p auth.Permissions) bool {
 		return p.Certificates
 	case usersAccess:
 		return p.Users
+	case historyAccess:
+		return p.History
 	}
 	return true
 }
@@ -82,11 +85,13 @@ func (h *handler) guard(level access, next http.HandlerFunc) http.Handler {
 			h.fail(w, r, err)
 			return
 		}
-		if !level.allowedBy(auth.PermissionsOf(s.user.Role)) {
+		if !level.allowedBy(h.auth.Permissions(s.user)) {
 			h.fail(w, r, auth.ErrForbidden)
 			return
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), signedInKey{}, s)))
+		// The versions of the sites the request changes record its user.
+		ctx := store.WithAuthor(context.WithValue(r.Context(), signedInKey{}, s), s.user.Username)
+		next(w, r.WithContext(ctx))
 	})
 }
 
@@ -218,7 +223,7 @@ type meResponse struct {
 }
 
 func (h *handler) describeMe(u store.User) meResponse {
-	return meResponse{User: h.describeUser(u), Permissions: auth.PermissionsOf(u.Role)}
+	return meResponse{User: h.describeUser(u), Permissions: h.auth.Permissions(u)}
 }
 
 func (h *handler) authConfig(w http.ResponseWriter, r *http.Request) {

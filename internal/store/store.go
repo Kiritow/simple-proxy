@@ -230,6 +230,24 @@ var migrations = [][]string{
 			value TEXT NOT NULL
 		) STRICT`,
 	},
+	{
+		// Every change of a site is kept as a version. Versions outlive their
+		// sites, so they do not refer to them by a foreign key.
+		`CREATE TABLE site_versions (
+			id         INTEGER PRIMARY KEY,
+			site_id    TEXT NOT NULL,
+			generation INTEGER NOT NULL,
+			kind       TEXT NOT NULL CHECK (kind IN ('initial', 'create', 'update', 'delete')),
+			config     TEXT NOT NULL,
+			author     TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		) STRICT`,
+		`CREATE INDEX site_versions_site ON site_versions (site_id, id)`,
+		`CREATE INDEX site_versions_created ON site_versions (created_at)`,
+		// The sites as they are when versions start being kept.
+		`INSERT INTO site_versions (site_id, generation, kind, config, author, created_at)
+			SELECT id, generation, 'initial', config, '', updated_at FROM sites ORDER BY position`,
+	},
 }
 
 // migrate upgrades the schema. Foreign keys are off meanwhile, as SQLite
@@ -352,22 +370,66 @@ func replaceSites(ctx context.Context, tx *sql.Tx, sites []Site) error {
 		return err
 	}
 
+	// The generations before the change tell which sites are new or
+	// changed, to keep a version of them.
+	before := map[string]int64{}
+	rows, err := tx.QueryContext(ctx, "SELECT id, generation FROM sites")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id string
+		var generation int64
+		if err := rows.Scan(&id, &generation); err != nil {
+			rows.Close()
+			return err
+		}
+		before[id] = generation
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
+	author := authorOf(ctx)
 	for i, site := range sites {
 		// json() minifies the config, so that unchanged sites compare equal
 		// and keep their updated_at.
-		_, err := tx.ExecContext(ctx, `
+		var generation int64
+		var config string
+		err := tx.QueryRowContext(ctx, `
 			INSERT INTO sites (id, position, config, created_at, updated_at)
 			VALUES (?1, ?2, json(?3), ?4, ?4)
 			ON CONFLICT (id) DO UPDATE SET
 				position = excluded.position,
 				config = excluded.config,
 				updated_at = iif(config = excluded.config, updated_at, excluded.updated_at),
-				generation = iif(config = excluded.config, generation, generation + 1)`,
-			site.ID, i, string(site.Config), now)
+				generation = iif(config = excluded.config, generation, generation + 1)
+			RETURNING generation, config`,
+			site.ID, i, string(site.Config), now).Scan(&generation, &config)
 		if err != nil {
 			return fmt.Errorf("storing site %q: %w", site.ID, err)
 		}
+		previous, existed := before[site.ID]
+		switch {
+		case !existed:
+			err = addVersion(ctx, tx, site.ID, generation, VersionCreate, config, author, now)
+		case generation != previous:
+			err = addVersion(ctx, tx, site.ID, generation, VersionUpdate, config, author, now)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	// Deleted sites get a version too, with the configuration they had.
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO site_versions (site_id, generation, kind, config, author, created_at)
+		SELECT id, generation, ?, config, ?, ? FROM sites
+		WHERE id NOT IN (SELECT value FROM json_each(?)) ORDER BY position`,
+		string(VersionDelete), author, now, string(idList))
+	if err != nil {
+		return err
 	}
 	_, err = tx.ExecContext(ctx,
 		"DELETE FROM sites WHERE id NOT IN (SELECT value FROM json_each(?))", string(idList))

@@ -512,6 +512,19 @@ func (m *Manager) applyLocked(ctx context.Context, st state) error {
 	return m.opts.Applier.Apply(ctx, conf)
 }
 
+// VersionStats sums up the versions of the sites, which the Store keeps of
+// every change, by the day they were made in the time zone offset east of
+// UTC.
+func (m *Manager) VersionStats(ctx context.Context, offset time.Duration) (store.VersionStats, error) {
+	return m.opts.Store.VersionStats(ctx, offset)
+}
+
+// PurgeVersions deletes the versions of sites made before the given time,
+// but the current version of each site, and returns how many it deleted.
+func (m *Manager) PurgeVersions(ctx context.Context, before time.Time) (int64, error) {
+	return m.opts.Store.PurgeVersions(ctx, before)
+}
+
 // NginxConfig returns the configuration generated from the stored sites.
 func (m *Manager) NginxConfig(ctx context.Context) ([]byte, error) {
 	st, err := m.load(ctx)

@@ -223,9 +223,37 @@ export type Permissions = {
   all_sites: boolean // add, delete and import sites, apply, nginx config
   certificates: boolean // change certificates and CAs
   users: boolean // manage users and settings
+  // history allows seeing the statistics of the versions of the sites, and
+  // clearing old ones: super administrators only.
+  history: boolean
 }
 
 export type Me = { user: User; permissions: Permissions }
+
+// VersionStats counts the versions kept of the sites, one for every
+// successful change, by the day they were created.
+export type VersionStats = {
+  versions: number
+  purgeable: number // what clearing may delete: all but each site's current one
+  bytes: number // the size of their configurations
+  sites: number // with versions, deleted ones included
+  oldest?: string // when the oldest version was created; absent without any
+  newest?: string
+  days: VersionDay[] // with versions, oldest first
+}
+
+// VersionDay counts the versions created on a day, in the time zone the
+// statistics were asked for.
+export type VersionDay = {
+  date: string // such as "2026-11-27"
+  versions: number
+  purgeable: number
+  bytes: number
+  created: number // by kind of change
+  updated: number
+  deleted: number
+  initial: number // the configurations sites had when versions began
+}
 
 // AuthConfig tells how to sign in.
 export type AuthConfig = {
@@ -465,6 +493,19 @@ export const api = {
   settings: () => request<Settings>("api/settings"),
   updateSettings: (settings: Settings) =>
     request<Settings>("api/settings", { method: "PUT", json: settings }),
+
+  // versionStats counts the versions by day, for days offset minutes east
+  // of UTC, such as -new Date().getTimezoneOffset() for the browser's.
+  versionStats: (offset: number) =>
+    request<VersionStats>(`api/versions/stats?offset=${offset}`),
+  // purgeVersions deletes the versions created before the given time, an
+  // RFC 3339 string, except the current one of each site, and returns how
+  // many it deleted.
+  purgeVersions: (before: string) =>
+    request<{ deleted: number }>("api/versions/purge", {
+      method: "POST",
+      json: { before },
+    }).then((r) => r.deleted),
 
   validate: (config: ConfigJSON, signal?: AbortSignal) =>
     request<void>("api/validate", { method: "POST", json: config, signal }),

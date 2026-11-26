@@ -193,8 +193,8 @@ func TestMigrationDropsRevisions(t *testing.T) {
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_schema WHERE name = 'revision'").Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
-	if version != 6 || tables != 0 {
-		t.Errorf("schema version %d with %d revision tables, want version 6 without", version, tables)
+	if version != 7 || tables != 0 {
+		t.Errorf("schema version %d with %d revision tables, want version 7 without", version, tables)
 	}
 }
 

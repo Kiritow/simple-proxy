@@ -75,6 +75,8 @@ type Options struct {
 //	DELETE /api/users/{id}     delete one
 //	GET    /api/settings       {"registration": true}: whether new accounts may sign up
 //	PUT    /api/settings       change them
+//	GET    /api/versions/stats  super administrators: the versions kept of every change of a site, by day; ?offset= minutes east of UTC
+//	POST   /api/versions/purge  delete the versions made before {"before": "<RFC 3339>"}, but each site's current one: {"deleted": 3}
 //	GET    /api/sites          the sites: {"sites": [{"id": "...", "config": {...}, "generation": 1, "created_at": "...", "updated_at": "..."}]}
 //	POST   /api/sites          add a site: {"config": {...}}
 //	PUT    /api/sites          replace all sites: {"configs": [{...}]}
@@ -169,6 +171,8 @@ func NewHandler(opts Options) http.Handler {
 	mux.Handle("DELETE /api/users/{id}", g(usersAccess, h.deleteUser))
 	mux.Handle("GET /api/settings", g(usersAccess, h.settings))
 	mux.Handle("PUT /api/settings", g(usersAccess, h.updateSettings))
+	mux.Handle("GET /api/versions/stats", g(historyAccess, h.versionStats))
+	mux.Handle("POST /api/versions/purge", g(historyAccess, h.purgeVersions))
 
 	mux.Handle("GET /api/example", g(sitesAccess, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")

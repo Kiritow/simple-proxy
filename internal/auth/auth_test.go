@@ -260,6 +260,27 @@ func TestFirstAdmin(t *testing.T) {
 	}
 }
 
+// The history of sites is for super administrators, or for all
+// administrators if the configuration lists none.
+func TestHistoryPermission(t *testing.T) {
+	s := openStore(t)
+	admin := store.User{Username: "admin", Role: store.Admin}
+	super := store.User{Username: "root", Role: store.Admin, Managed: true}
+	platform := store.User{Username: "p", Role: store.PlatformOperator, Managed: true}
+
+	svc, _ := newService(t, s, auth.Config{Admins: []auth.AdminConfig{{Username: "root", Password: "root-password"}}})
+	if !svc.Permissions(super).History || svc.Permissions(admin).History || svc.Permissions(platform).History {
+		t.Error("with super administrators, only they may see the history")
+	}
+	if p := svc.Permissions(super); !p.Sites || !p.AllSites || !p.Certificates || !p.Users {
+		t.Errorf("super administrator permissions = %+v", p)
+	}
+	svc, _ = newService(t, s, auth.Config{})
+	if !svc.Permissions(admin).History || svc.Permissions(platform).History {
+		t.Error("without super administrators, administrators may see the history")
+	}
+}
+
 func TestLastAdmin(t *testing.T) {
 	s := openStore(t)
 	ctx := t.Context()
