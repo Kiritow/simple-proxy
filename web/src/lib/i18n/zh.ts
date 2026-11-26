@@ -154,6 +154,12 @@ export const zh: Messages = {
     previewEmpty: "填写站点信息后，这里会显示它给 nginx 增加的配置。",
     previewProblems: "修改标出的字段后，才能显示配置变化。",
     previewNoChanges: "保存不会改变 nginx 的配置。",
+    viewChanges: "配置变化",
+    viewConfig: "配置预览",
+    configEmpty: "填写站点信息后，这里会显示它的 nginx 配置。",
+    configProblems: "修改标出的字段后，才能显示配置。",
+    configUnavailable: "完善站点设置后，才能显示它的配置。",
+    configDisabled: "这个站点已停用：启用后 nginx 才会使用这段配置。",
     changedTitle: "这个站点已在另一个窗口中被修改",
     changedText:
       "在你开始编辑之后，它被保存过。可以加载已保存的版本（会丢弃你的修改），也可以保留你的修改，保存时覆盖它。显示的变化是相对于已保存版本的。",
@@ -171,6 +177,13 @@ export const zh: Messages = {
     rawLabel: "nginx 配置",
     rawHint:
       '这个站点在 nginx 中的全部配置（例如 server 块），按原样使用，HTTP 跳转和 ACME 验证也要自己写。用 {{cert "名称"}} 和 {{key "名称"}} 引用证书，续期后会自动更新。',
+    toRawFailed: "无法切换到原始 nginx 配置",
+    toBuilderTitle: "切换回构建器？",
+    toBuilderText:
+      "原始配置中的所有内容（包括你的编辑）都会丢失。构建器会恢复到切换之前的设置。",
+    toBuilderTextBlank:
+      "原始配置中的所有内容（包括你的编辑）都会丢失。这个站点是手写的配置，构建器将从空白开始。",
+    toBuilderAction: "丢弃并切换",
   },
   certs: {
     title: "证书",

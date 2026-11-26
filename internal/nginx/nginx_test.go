@@ -209,6 +209,14 @@ func TestRaw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Servers are generated as they appear in the configuration.
+	servers, err := gen.Servers(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(servers, "server {\n") || !strings.HasSuffix(string(want), "\n"+servers) || strings.Contains(servers, "default_server") {
+		t.Errorf("Servers = %s\nnot at the end of\n%s", servers, want)
+	}
 	raw, err := gen.Raw(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)

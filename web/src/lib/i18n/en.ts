@@ -162,6 +162,13 @@ export const en = {
     previewEmpty: "Fill in the site to see what it adds to nginx.",
     previewProblems: "Fix the highlighted fields to see the changes.",
     previewNoChanges: "Saving changes nothing in nginx.",
+    viewChanges: "Changes",
+    viewConfig: "Config preview",
+    configEmpty: "Fill in the site to see its nginx configuration.",
+    configProblems: "Fix the highlighted fields to see the configuration.",
+    configUnavailable: "Complete the site to see its configuration.",
+    configDisabled:
+      "This site is off: nginx gets this configuration once it is on.",
     changedTitle: "This site was changed in another window",
     changedText:
       "It was saved after you started editing. Load the saved version, which discards your edits, or keep your edits to overwrite it when you save. The changes shown are against the saved version.",
@@ -179,6 +186,13 @@ export const en = {
     rawLabel: "nginx configuration",
     rawHint:
       'All that nginx gets for this site, such as server blocks, as written: HTTP redirects and ACME challenges included. Refer to certificates as {{cert "name"}} and {{key "name"}}, which follow renewals.',
+    toRawFailed: "Could not switch to raw nginx config",
+    toBuilderTitle: "Switch back to the builder?",
+    toBuilderText:
+      "Everything in the raw configuration will be lost, your edits included. The builder returns to its settings from before you switched.",
+    toBuilderTextBlank:
+      "Everything in the raw configuration will be lost, your edits included. The site was written by hand, so the builder starts empty.",
+    toBuilderAction: "Discard and switch",
   },
   certs: {
     title: "Certificates",

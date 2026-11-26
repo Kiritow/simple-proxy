@@ -38,6 +38,9 @@ export type StoredSite = {
 export type Preview = {
   current: string
   proposed: string
+  // site is the configuration of the site alone, as it would be enabled;
+  // empty if it cannot be generated, as only disabled sites may.
+  site: string
   generation: number // of the stored site; 0 for a new site
 }
 

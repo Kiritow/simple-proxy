@@ -14,6 +14,16 @@ import {
   useDescribe,
 } from "@/components/form"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -190,28 +200,50 @@ export function SiteDialog({
       routes: s.routes.map((r) => (r.id === id ? { ...r, ...p } : r)),
     }))
 
-  // Switching to raw mode starts from the configuration the builder
-  // generates; switching back keeps the raw configuration for another
-  // switch until the dialog closes.
-  const [lastRaw, setLastRaw] = useState<string | null>(null)
+  // showFailure keeps the problems of a failed request until the site
+  // changes, and moves to the first of them.
+  const showFailure = (error: ApiError, placed: Problems) => {
+    setFailure({ error, problems: placed })
+    const first = [...placed.byKey.keys()][0]
+    if (first) {
+      setTab(tabOf(site, first))
+      setFocusRequest({ key: first })
+    }
+  }
+
+  // Switching to raw mode starts from the configuration the server
+  // generates for the builder's settings, every time, and stays in the
+  // builder if it cannot. Switching back discards the raw configuration,
+  // once confirmed, and the builder has its settings from before.
   const [converting, setConverting] = useState(false)
+  const [confirmingBuilder, setConfirmingBuilder] = useState(false)
+  // Sites opened with a raw configuration have no builder settings.
+  const [builderBlank, setBuilderBlank] = useState(() => site.raw !== null)
   const toRaw = async () => {
     if (site.raw !== null || converting) return
-    let raw = lastRaw
-    if (raw === null) {
-      setConverting(true)
-      try {
-        raw = await api.rawSite(toServer(site))
-      } catch {
-        raw = rawTemplate(domainsOf(site))
+    setConverting(true)
+    try {
+      const raw = await api.rawSite(toServer(site))
+      patch({ raw })
+    } catch (err) {
+      const error = errorOf(err)
+      const placed = toProblems(error, serialize([site]).owners)
+      const placedAny = placed.byKey.size > 0
+      if (placedAny) {
+        setTouched(true)
+        showFailure(error, placed)
       }
+      toast.error(t.site.toRawFailed, {
+        description: placedAny ? t.site.fixFields : error.message,
+      })
+    } finally {
       setConverting(false)
     }
-    patch({ raw })
   }
   const toBuilder = () => {
+    setConfirmingBuilder(false)
     if (site.raw === null) return
-    setLastRaw(site.raw)
+    setBuilderBlank(false)
     patch({ raw: null })
   }
 
@@ -233,13 +265,7 @@ export function SiteDialog({
       else await api.createSite(config)
     } catch (err) {
       const error = errorOf(err)
-      const placed = toProblems(error, serialize([site]).owners)
-      setFailure({ error, problems: placed })
-      const first = [...placed.byKey.keys()][0]
-      if (first) {
-        setTab(tabOf(site, first))
-        setFocusRequest({ key: first })
-      }
+      showFailure(error, toProblems(error, serialize([site]).owners))
       setSaving(false)
       return
     }
@@ -306,7 +332,8 @@ export function SiteDialog({
                 size="sm"
                 variant={site.raw === null ? "secondary" : "ghost"}
                 aria-pressed={site.raw === null}
-                onClick={toBuilder}
+                onClick={() => site.raw !== null && setConfirmingBuilder(true)}
+                disabled={converting}
               >
                 {t.site.modeBuilder}
               </Button>
@@ -332,7 +359,14 @@ export function SiteDialog({
                 enabledId={`${key}.enabled`}
               />
             ) : (
-              <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+              <Tabs
+                value={tab}
+                onValueChange={(v) => setTab(v as Tab)}
+                // Not editable while the raw configuration is generated.
+                inert={converting}
+                aria-busy={converting}
+                className={converting ? "opacity-60 transition-opacity" : ""}
+              >
                 <TabsList className="w-full">
                   {tabs.map((tab) => (
                     <TabsTrigger key={tab} value={tab} className="gap-1.5">
@@ -493,6 +527,8 @@ export function SiteDialog({
           <ChangesPanel
             state={preview}
             touched={touched}
+            canShowConfig={site.raw === null}
+            enabled={site.enabled}
             className="min-h-80 shrink-0 lg:min-h-0"
           />
         </div>
@@ -510,6 +546,23 @@ export function SiteDialog({
         </DialogFooter>
       </DialogContent>
 
+      <AlertDialog open={confirmingBuilder} onOpenChange={setConfirmingBuilder}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t.site.toBuilderTitle}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {builderBlank ? t.site.toBuilderTextBlank : t.site.toBuilderText}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t.app.cancel}</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={toBuilder}>
+              {t.site.toBuilderAction}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {issuing && (
         <IssueDialog
           key={issuing.key}
@@ -525,20 +578,6 @@ export function SiteDialog({
       )}
     </Dialog>
   )
-}
-
-// rawTemplate starts the raw configuration of a site that the builder
-// cannot generate yet.
-function rawTemplate(domains: string[]): string {
-  return `server {
-  listen 80;
-  server_name ${domains.join(" ") || "example.com"};
-
-  location / {
-    proxy_pass http://127.0.0.1:3000;
-  }
-}
-`
 }
 
 // RawEditor edits the raw configuration of a site, which replaces the

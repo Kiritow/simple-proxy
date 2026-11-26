@@ -87,8 +87,10 @@ type Options struct {
 // A site's generation counts its changes. Changes and deletions based on an
 // outdated generation fail with 409 Conflict, so that concurrent editors do
 // not overwrite each other; without a generation, they always apply. The
-// preview answers {"current": "...", "proposed": "...", "generation": 1}:
-// the configuration before and after saving, and the site's current
+// preview answers {"current": "...", "proposed": "...", "site": "...",
+// "generation": 1}: the configuration before and after saving, the
+// configuration of the site alone, as it would be enabled ("" if it cannot
+// be generated, as only disabled sites may), and the site's current
 // generation (0 for a new site, whose id is empty).
 //
 // Errors are reported as
@@ -242,6 +244,7 @@ func (h *handler) previewSite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"current":    string(p.Current),
 		"proposed":   string(p.Proposed),
+		"site":       p.Site,
 		"generation": p.Generation,
 	})
 }

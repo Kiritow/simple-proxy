@@ -464,6 +464,21 @@ func TestPreview(t *testing.T) {
 	if err != nil || p.Generation != 0 || !strings.Contains(string(p.Proposed), "server_name b.example.com;") || strings.Contains(string(p.Current), "b.example.com") {
 		t.Errorf("new site preview = %+v, %v", p, err)
 	}
+	// The site's own configuration is the part of the proposed one it adds.
+	if !strings.HasPrefix(p.Site, "server {\n") || !strings.Contains(p.Site, "server_name b.example.com;") || strings.Contains(p.Site, "a.example.com") || !strings.Contains(string(p.Proposed), p.Site) {
+		t.Errorf("Site = %q, proposed:\n%s", p.Site, p.Proposed)
+	}
+
+	// Disabled sites are not in the configuration, but the preview shows
+	// what they would add once enabled, if it can be generated.
+	p, err = e.m.Preview(ctx, "", json.RawMessage(`{"server_name": "c.example.com", "enable": false, "default": {"port": 6000}}`))
+	if err != nil || strings.Contains(string(p.Proposed), "c.example.com") || !strings.Contains(p.Site, "proxy_pass http://127.0.0.1:6000;") {
+		t.Errorf("disabled site preview = %+v, %v", p, err)
+	}
+	p, err = e.m.Preview(ctx, "", json.RawMessage(`{"server_name": "c.example.com", "enable": false, "cert_name": "nope", "default": {"port": 6000}}`))
+	if err != nil || p.Site != "" {
+		t.Errorf("disabled site with a missing certificate: Site = %q, %v", p.Site, err)
+	}
 
 	// Problems are found like when saving, domain conflicts included.
 	if _, err := e.m.Preview(ctx, "", site("A.example.com", 1)); len(fields(err)) != 1 || !strings.Contains(fields(err)[0], "is used by another site") {

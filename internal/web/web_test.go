@@ -150,6 +150,7 @@ func TestUpdateAndDelete(t *testing.T) {
 		{"preview", "POST", "/api/sites/preview", `{"id": "` + id + `", "config": {"server_name": "a.example.com", "default": {"port": 2}}}`, false, 200, `"generation":1,`},
 		{"preview shows the change", "POST", "/api/sites/preview", `{"id": "` + id + `", "config": {"server_name": "a.example.com", "default": {"port": 2}}}`, false, 200, `proxy_pass http://127.0.0.1:2;`},
 		{"preview of a new site", "POST", "/api/sites/preview", `{"config": {"server_name": "b.example.com", "default": {"port": 3}}}`, false, 200, `"generation":0`},
+		{"preview of the site alone", "POST", "/api/sites/preview", `{"config": {"server_name": "b.example.com", "default": {"port": 3}}}`, false, 200, `"site":"server {`},
 		{"preview problems", "POST", "/api/sites/preview", `{"config": {"server_name": "A.example.com", "default": {"port": 3}}}`, false, 400, `"code":"domain_in_use"`},
 		{"preview of a missing site", "POST", "/api/sites/preview", `{"id": "nope", "config": {"server_name": "x.example.com"}}`, false, 404, "site not found"},
 		{"update", "PUT", "/api/sites/" + id, `{"config": {"server_name": "a.example.com", "default": {"port": 2}}, "generation": 1}`, false, 200, `"port":2}},"generation":2}`},

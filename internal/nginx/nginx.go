@@ -205,14 +205,11 @@ func (g *Generator) servers(ctx context.Context, cfg *config.Config) ([]server, 
 	return out, nil
 }
 
-// Raw returns the server blocks of cfg, which must have been returned by
-// config.Parse, as the raw configuration of a site, without the catch-all
-// servers: certificates are referred to by name rather than located, so
-// OCSP stapling, which needs acme.sh's CA chains, is left out.
-func (g *Generator) Raw(ctx context.Context, cfg *config.Config) (string, error) {
-	gen := *g
-	gen.refs = true
-	servers, err := gen.servers(ctx, cfg)
+// Servers returns the server blocks of cfg, which must have been returned by
+// config.Parse, as they appear in the configuration that Generate returns,
+// but without the catch-all servers. Errors are those of Generate.
+func (g *Generator) Servers(ctx context.Context, cfg *config.Config) (string, error) {
+	servers, err := g.servers(ctx, cfg)
 	if err != nil {
 		return "", err
 	}
@@ -220,7 +217,20 @@ func (g *Generator) Raw(ctx context.Context, cfg *config.Config) (string, error)
 	if err := confTemplate.ExecuteTemplate(&buf, "servers", servers); err != nil {
 		return "", err
 	}
-	return strings.TrimPrefix(buf.String(), "\n") + "\n", nil
+	text := strings.TrimPrefix(buf.String(), "\n")
+	if text == "" {
+		return "", nil
+	}
+	return text + "\n", nil
+}
+
+// Raw returns the server blocks of cfg, like Servers, as the raw
+// configuration of a site: certificates are referred to by name rather than
+// located, so OCSP stapling, which needs acme.sh's CA chains, is left out.
+func (g *Generator) Raw(ctx context.Context, cfg *config.Config) (string, error) {
+	gen := *g
+	gen.refs = true
+	return gen.Servers(ctx, cfg)
 }
 
 // expandRefs replaces the references to certificates in a raw

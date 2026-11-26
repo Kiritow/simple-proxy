@@ -1,45 +1,80 @@
-import { useMemo } from "react"
-import { FileDiff } from "lucide-react"
+import { useMemo, useState, type ReactNode } from "react"
+import { FileCode, FileDiff } from "lucide-react"
 import { cn } from "cn"
 
+import { NginxCode } from "@/components/code-view"
+import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import type { Preview } from "@/lib/api"
 import { diffLines, hunks, type DiffLine } from "@/lib/diff"
 import type { PreviewState } from "@/lib/hooks"
 import { useI18n } from "@/lib/i18n"
 
+type View = "changes" | "config"
+
 // ChangesPanel shows what saving a site would change in the nginx
-// configuration.
+// configuration or, if canShowConfig and chosen, the configuration of the
+// site alone.
 export function ChangesPanel({
   state,
   touched,
+  canShowConfig,
+  enabled,
   className,
 }: {
   state: PreviewState
   touched: boolean // whether problems with the site are shown
+  canShowConfig: boolean // whether the configuration of the site can be chosen
+  enabled: boolean // whether the site is enabled
   className?: string
 }) {
   const { t } = useI18n()
   const { error, loading } = state
+  const [chosen, setChosen] = useState<View>("changes")
+  const view = canShowConfig ? chosen : "changes"
 
   const changes = useMemo(() => summarize(state.preview), [state.preview])
 
   let body
   if (error && (error.status === 400 || error.status === 422)) {
+    const config = view === "config"
     body = (
       <Message>
-        {touched ? t.site.previewProblems : t.site.previewEmpty}
+        {touched
+          ? config
+            ? t.site.configProblems
+            : t.site.previewProblems
+          : config
+            ? t.site.configEmpty
+            : t.site.previewEmpty}
       </Message>
     )
   } else if (error?.status === 404) {
     body = <Message>{t.site.deletedText}</Message> // deleted elsewhere
   } else if (error) {
     body = <Message>{error.message}</Message>
-  } else if (!changes) {
+  } else if (!state.preview || !changes) {
     body = (
       <div className="flex flex-1 items-center justify-center">
         <Spinner />
       </div>
+    )
+  } else if (view === "config") {
+    body = state.preview.site ? (
+      <>
+        {!enabled && (
+          <p className="border-b bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+            {t.site.configDisabled}
+          </p>
+        )}
+        <pre className="w-max min-w-full px-3 py-1 font-mono text-xs leading-5">
+          <code>
+            <NginxCode text={state.preview.site.trimEnd()} />
+          </code>
+        </pre>
+      </>
+    ) : (
+      <Message>{t.site.configUnavailable}</Message>
     )
   } else if (changes.hunks.length === 0) {
     body = <Message>{t.site.previewNoChanges}</Message>
@@ -60,7 +95,8 @@ export function ChangesPanel({
     )
   }
 
-  const showCounts = changes && !error && changes.hunks.length > 0
+  const showCounts =
+    view === "changes" && changes && !error && changes.hunks.length > 0
   return (
     <section
       aria-label={t.site.preview}
@@ -69,9 +105,39 @@ export function ChangesPanel({
         className
       )}
     >
-      <header className="flex items-center gap-2 border-b px-3 py-2 text-sm font-medium">
-        <FileDiff className="size-4 text-muted-foreground" />
-        <span className="mr-auto">{t.site.preview}</span>
+      <header
+        className={cn(
+          "flex items-center gap-2 border-b px-3 text-sm font-medium",
+          canShowConfig ? "py-1.5" : "py-2"
+        )}
+      >
+        {canShowConfig ? (
+          <div
+            role="group"
+            aria-label={t.site.preview}
+            className="mr-auto inline-flex gap-0.5 rounded-lg border bg-background/60 p-0.5"
+          >
+            <ViewButton
+              active={view === "changes"}
+              onClick={() => setChosen("changes")}
+            >
+              <FileDiff />
+              {t.site.viewChanges}
+            </ViewButton>
+            <ViewButton
+              active={view === "config"}
+              onClick={() => setChosen("config")}
+            >
+              <FileCode />
+              {t.site.viewConfig}
+            </ViewButton>
+          </div>
+        ) : (
+          <>
+            <FileDiff className="size-4 text-muted-foreground" />
+            <span className="mr-auto">{t.site.preview}</span>
+          </>
+        )}
         {loading && <Spinner className="size-3.5 text-muted-foreground" />}
         {showCounts && (
           <span className="font-mono text-xs">
@@ -86,6 +152,27 @@ export function ChangesPanel({
       </header>
       <div className="flex min-h-0 flex-1 flex-col overflow-auto">{body}</div>
     </section>
+  )
+}
+
+function ViewButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <Button
+      size="xs"
+      variant={active ? "secondary" : "ghost"}
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
   )
 }
 

@@ -262,6 +262,11 @@ type Preview struct {
 	// Current and Proposed are the configuration before and after saving,
 	// generated at the same time.
 	Current, Proposed []byte
+	// Site is the configuration generated for the site alone, as it appears
+	// in Proposed, or would once enabled. It is empty if the site cannot be
+	// generated, which only disabled sites get away with, as they are not
+	// checked as thoroughly.
+	Site string
 	// Generation is the site's current generation; 0 for a new site.
 	Generation int64
 }
@@ -302,7 +307,23 @@ func (m *Manager) Preview(ctx context.Context, id string, cfg json.RawMessage) (
 	if p.Proposed, err = m.renderAt(ctx, next, now); err != nil {
 		return Preview{}, err
 	}
+	p.Site = m.siteConfig(ctx, site, current.certs)
 	return p, nil
+}
+
+// siteConfig returns the configuration generated for site alone, as it
+// would be enabled, or "" if it cannot be generated.
+func (m *Manager) siteConfig(ctx context.Context, site store.Site, certs []store.Cert) string {
+	cfg, err := parse([]store.Site{site})
+	if err != nil {
+		return ""
+	}
+	cfg.Servers[0].Enable = nil
+	text, err := m.generator(certs).Servers(ctx, cfg)
+	if err != nil {
+		return ""
+	}
+	return text
 }
 
 // ReplaceSites replaces all sites with new ones with the given
