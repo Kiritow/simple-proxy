@@ -29,6 +29,10 @@ export const zh: Messages = {
     notApplyingText:
       "站点只会被保存。用 -nginx-conf 启动服务器后，才会把站点应用到 nginx。",
     outOfDateText: "应用站点失败，nginx 可能没有运行已保存的站点：",
+    version: "版本",
+    versionUnknown: "未知",
+    noVersionCommand: "启动服务时加上 -nginx-version 即可显示。",
+    buildDetails: "构建信息",
     configFile: "配置文件",
     testCommand: "检查命令",
     reloadCommand: "重载命令",

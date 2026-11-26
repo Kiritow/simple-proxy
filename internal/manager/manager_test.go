@@ -47,6 +47,7 @@ type env struct {
 	reloads  string // a file logging reloads
 	certDir  string
 	failFlag string // nginx rejects everything while this file exists
+	version  string // what nginx -V prints
 }
 
 // fakeNginxTest rejects configurations containing "reject_me", or while
@@ -74,6 +75,7 @@ func newEnv(t *testing.T) *env {
 		reloads:  filepath.Join(dir, "reloads"),
 		certDir:  filepath.Join(dir, "certs"),
 		failFlag: filepath.Join(dir, "proxy.conf.fail"),
+		version:  filepath.Join(dir, "nginx-V"),
 	}
 	e.m = manager.New(manager.Options{
 		Store:     s,
@@ -83,6 +85,8 @@ func newEnv(t *testing.T) *env {
 			Path:   e.conf,
 			Test:   []string{"sh", "-c", fakeNginxTest, e.conf},
 			Reload: []string{"sh", "-c", `echo reload >> "$0"`, e.reloads},
+			// Prints the file e.version, like nginx -V, to stderr.
+			Version: []string{"sh", "-c", `cat "$0" >&2`, e.version},
 		},
 		CA:          e.ca,
 		ACMEWebroot: "/var/www/acme",
@@ -296,6 +300,42 @@ func TestApplyFailureIsReported(t *testing.T) {
 	st := e.m.Status()
 	if !strings.Contains(st.Error, "test failed") || !strings.Contains(st.Output, "[emerg]") {
 		t.Errorf("Status = %+v, want the failed test and its output", st)
+	}
+}
+
+func TestNginxVersion(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	if st := e.m.Status(); st.Nginx != nil || st.VersionCommand == "" {
+		t.Errorf("Status = %+v, want nginx unknown before applying", st)
+	}
+	setVersion := func(text string) {
+		t.Helper()
+		if err := os.WriteFile(e.version, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setVersion("nginx version: nginx/1.27.3\nbuilt with OpenSSL 3.0.15 3 Sep 2024\n")
+	if err := e.m.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.m.Status(); st.Nginx == nil || st.Nginx.Version != "nginx/1.27.3" || st.Nginx.Build != "built with OpenSSL 3.0.15 3 Sep 2024" || st.NginxError != "" {
+		t.Errorf("Status = %+v, nginx %+v", st, st.Nginx)
+	}
+	// Applying again finds out about upgrades, and failures.
+	setVersion("nginx version: nginx/1.29.0\n")
+	if err := e.m.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.m.Status(); st.Nginx == nil || st.Nginx.Version != "nginx/1.29.0" {
+		t.Errorf("after an upgrade, nginx %+v", st.Nginx)
+	}
+	os.Remove(e.version)
+	if err := e.m.Apply(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.m.Status(); st.Nginx != nil || !strings.Contains(st.NginxError, "No such file") {
+		t.Errorf("Status = %+v, want the failure of the version command", st)
 	}
 }
 

@@ -103,3 +103,38 @@ func TestApplyRestoresAfterFailedReload(t *testing.T) {
 		t.Errorf("file = %q, want the previous configuration", got)
 	}
 }
+
+// nginxV prints like nginx -V, to stderr.
+const nginxV = `echo "nginx version: nginx/1.27.3
+built by gcc 12.2.0 (Debian 12.2.0-14)
+built with OpenSSL 3.0.15 3 Sep 2024
+TLS SNI support enabled
+configure arguments: --prefix=/etc/nginx --with-http_ssl_module" >&2`
+
+func TestNginx(t *testing.T) {
+	a, _ := newApplier(t, nil)
+	if _, err := a.Nginx(t.Context()); !errors.Is(err, apply.ErrNoVersion) {
+		t.Errorf("Nginx without a Version command: %v, want ErrNoVersion", err)
+	}
+
+	a.Version = []string{"sh", "-c", nginxV}
+	got, err := a.Nginx(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != "nginx/1.27.3" || !strings.HasPrefix(got.Build, "built by gcc") || !strings.HasSuffix(got.Build, "--with-http_ssl_module") {
+		t.Errorf("Nginx = %+v", got)
+	}
+
+	a.Version = []string{"sh", "-c", "echo 'nginx version: openresty/1.25.3.1' >&2"}
+	if got, err := a.Nginx(t.Context()); err != nil || got.Version != "openresty/1.25.3.1" || got.Build != "" {
+		t.Errorf("Nginx of OpenResty = %+v, %v", got, err)
+	}
+
+	for _, cmd := range []string{"echo hello", "echo 'sh: nginx: not found' >&2; exit 127"} {
+		a.Version = []string{"sh", "-c", cmd}
+		if got, err := a.Nginx(t.Context()); err == nil {
+			t.Errorf("Nginx with %q = %+v, want an error", cmd, got)
+		}
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -49,6 +50,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	nginxConf := flags.String("nginx-conf", "", "`path` of the nginx configuration file to manage, e.g. /etc/nginx/conf.d/proxy.conf; if empty, sites are only stored")
 	nginxTest := flags.String("nginx-test", "nginx -t", "`command` testing nginx's configuration")
 	nginxReload := flags.String("nginx-reload", "nginx -s reload", "`command` reloading nginx")
+	nginxVersion := flags.String("nginx-version", "", "`command` printing nginx's version and build, shown in the UI (default: -nginx-test with -V for -t)")
 	acmeBin := flags.String("acme", defaultAcmeBin(), "`path` of the acme.sh script managing certificates")
 	acmeWebroot := flags.String("acme-webroot", "", "`directory` served at /.well-known/acme-challenge/ to issue certificates over HTTP; if empty, only DNS validation is available")
 	fallbackCert := flags.String("fallback-cert", nginx.DefaultFallbackCert, "`path` of the certificate presented to requests for unknown hosts")
@@ -97,9 +99,10 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	if *nginxConf != "" {
 		opts.Applier = &apply.Applier{
-			Path:   *nginxConf,
-			Test:   strings.Fields(*nginxTest),
-			Reload: strings.Fields(*nginxReload),
+			Path:    *nginxConf,
+			Test:    strings.Fields(*nginxTest),
+			Reload:  strings.Fields(*nginxReload),
+			Version: versionCommand(*nginxVersion, *nginxTest),
 		}
 	}
 
@@ -153,6 +156,22 @@ func defaultDBPath() string {
 		return "sites.db"
 	}
 	return filepath.Join(filepath.Dir(exe), "sites.db")
+}
+
+// versionCommand returns the command printing nginx's version: version if
+// set, otherwise the test command with -V for -t, so that it asks the same
+// nginx, e.g. through "docker exec". Without either, it returns nil.
+func versionCommand(version, test string) []string {
+	if version != "" {
+		return strings.Fields(version)
+	}
+	cmd := strings.Fields(test)
+	i := slices.Index(cmd, "-t")
+	if i < 0 {
+		return nil
+	}
+	cmd[i] = "-V"
+	return cmd
 }
 
 func defaultAcmeBin() string {

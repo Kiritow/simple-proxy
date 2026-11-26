@@ -46,12 +46,22 @@ export type Status = {
   config_path?: string
   test_command?: string
   reload_command?: string
+  // nginx as version_command describes it once known, or why it is not.
+  version_command?: string
+  nginx?: NginxInfo
+  nginx_error?: string
   applied_at?: string
   error?: string
   output?: string
   acme: boolean // acme.sh can list and issue certificates
   acme_webroot?: string
   cert_dir: string // where uploaded and signed certificates are written
+}
+
+// NginxInfo describes nginx, as nginx -V does.
+export type NginxInfo = {
+  version: string // such as "nginx/1.27.3"
+  build?: string // e.g. its OpenSSL and configure arguments
 }
 
 export type CertificateSource = "acme" | "uploaded" | "signed"

@@ -28,6 +28,10 @@ export const en = {
       "Sites are only stored. Start the server with -nginx-conf to apply them to nginx.",
     outOfDateText:
       "nginx may not run the stored sites, because applying them failed:",
+    version: "Version",
+    versionUnknown: "Unknown",
+    noVersionCommand: "Start the server with -nginx-version to show it.",
+    buildDetails: "Build details",
     configFile: "Configuration file",
     testCommand: "Test command",
     reloadCommand: "Reload command",

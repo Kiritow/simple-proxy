@@ -54,6 +54,7 @@ is available. It also cross-compiles: `./build.sh linux/arm64` or
 | `-nginx-conf`    | none                    | The configuration file to manage, which nginx must include in its `http` block. Without it, sites are only stored. |
 | `-nginx-test`    | `nginx -t`              | Command testing nginx's configuration. |
 | `-nginx-reload`  | `nginx -s reload`       | Command reloading nginx; acme.sh also runs it after renewing certificates. |
+| `-nginx-version` | `-nginx-test` with `-V` for `-t` | Command printing nginx's version and build like `nginx -V`, shown in the console, e.g. `podman exec nginx nginx -V` for `podman exec nginx nginx -t`. |
 | `-acme`          | `~/.acme.sh/acme.sh`    | The acme.sh script. Without it, only uploaded and signed certificates are available. |
 | `-acme-webroot`  | none                    | Directory that nginx serves at `/.well-known/acme-challenge/` on port 80, to request certificates over HTTP. Without it, only DNS validation is available. |
 | `-fallback-cert` | `/certs/fallback.cer`   | Certificate presented to HTTPS requests for unknown hosts. |
@@ -68,9 +69,11 @@ On every change, and once on startup, the configuration of all enabled sites
 is written to `-nginx-conf`, tested with `-nginx-test`, and loaded with
 `-nginx-reload`. If the test or the reload fails, the previous file is
 restored, so the file always holds a configuration nginx accepted. The header
-shows whether nginx runs the stored sites; its dialog shows the commands, the
-last error and the generated configuration, and can apply the sites again,
-e.g. after nginx restarted.
+shows whether nginx runs the stored sites; its dialog shows nginx's version
+and build (OpenSSL, configure arguments), the commands, the last error and
+the generated configuration, and can apply the sites again, e.g. after nginx
+restarted. The version is found out with `-nginx-version` on startup and
+whenever the sites are applied again, so upgrades show up then.
 
 The configuration always contains catch-all servers that reject requests for
 unknown hosts on ports 80 and 443. The latter needs a certificate, e.g. a
@@ -230,7 +233,7 @@ The console is built on this API, which scripts can use as well. A site's
 | `DELETE /api/sites/{id}`  | Remove a site: `?generation=1`. |
 | `POST /api/sites/preview` | What saving a site would change, without saving it: `{"id": "...", "config": {...}}` (no `id` for a new site) gives `{"current": "...", "proposed": "...", "generation": 1}`. |
 | `PUT /api/sites`          | Replace all sites: `{"configs": [{...}]}`. |
-| `GET /api/status`         | How sites are applied to nginx, and the last error. |
+| `GET /api/status`         | How sites are applied to nginx, the last error, and nginx's version: `"nginx": {"version": "nginx/1.27.3", "build": "..."}`, or `"nginx_error"` if it could not be found out. |
 | `POST /api/apply`         | Apply the stored sites again. |
 | `GET /api/nginx.conf`     | The configuration generated from the sites. |
 | `GET /api/certificates`   | All certificates: `{"certificates": [{"id": "...", "name": "...", "source": "uploaded", ...}], "acme_error": "..."}`, where `source` is `acme`, `uploaded` or `signed`; acme.sh's have no `id`. |
