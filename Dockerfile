@@ -9,8 +9,8 @@
 
 ARG NGINX_IMAGE=docker.io/library/nginx:stable
 
-# The UI is built from web/ rather than taken from internal/web/dist, so
-# that the image always matches the sources.
+# The UI is built from web/ into internal/web/dist, which the server embeds;
+# it is not in the repository.
 FROM --platform=$BUILDPLATFORM docker.io/library/node:24-alpine AS ui
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./

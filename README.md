@@ -45,9 +45,11 @@ dist/simple-proxy-linux-amd64 -nginx-conf /etc/nginx/conf.d/simple-proxy.conf \
   -acme-webroot /var/www/acme      # serves http://127.0.0.1:8080
 ```
 
-`build.sh` builds static, stripped binaries, rebuilding the UI first when npm
-is available. It also cross-compiles: `./build.sh linux/arm64` or
-`./build.sh all`. Plain `go build .` works too.
+`build.sh` builds the UI, then static, stripped binaries embedding it, so it
+needs Node.js (npm) besides Go. It also cross-compiles: `./build.sh
+linux/arm64` or `./build.sh all`. Plain `go build .` works too once the UI is
+built (see [Development](#development)); without it, Go fails with `pattern
+dist: no matching files found`.
 
 | Flag             | Default                 | Description |
 | ---------------- | ----------------------- | ----------- |
@@ -322,8 +324,9 @@ web/src/lib/i18n/  the UI's messages in English (en.ts) and Chinese (zh.ts)
 Dockerfile         the image with nginx and acme.sh; docker/entrypoint.sh runs them
 ```
 
-The built UI in `internal/web/dist` is committed, so building the server only
-needs Go. After changing `web/`, rebuild it:
+The UI is built into `internal/web/dist`, which the server embeds and git
+ignores: build it before building or testing the server with Go, which fails
+without it, and again after changing `web/`:
 
 ```bash
 npm --prefix web ci

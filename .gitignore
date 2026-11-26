@@ -12,4 +12,5 @@
 *.db
 *.db-journal
 
-# The UI build output in internal/web/dist is committed on purpose.
+# The UI, built from web/ for internal/web to embed.
+/internal/web/dist/

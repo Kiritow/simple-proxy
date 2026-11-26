@@ -1,7 +1,9 @@
 // Package web serves the browser UI and the HTTP API of simple-proxy.
 //
 // The UI is the React application in the web directory of the repository,
-// built into dist by `go generate` (which requires `npm ci` in web first).
+// built into dist by `go generate` (which requires `npm ci` in web first) or
+// build.sh. dist is not in the repository, so the package only compiles once
+// the UI is built.
 package web
 
 //go:generate npm --prefix ../../web run build
@@ -32,6 +34,14 @@ import (
 // MaxConfigSize is the size limit of request bodies, in bytes.
 const MaxConfigSize = 1 << 20
 
+// dist is the UI. If compiling fails here with "pattern dist: no matching
+// files found", build the UI first, which needs Node.js:
+//
+//	npm --prefix web ci && go generate ./internal/web
+//
+// or run build.sh. Without the UI, nothing compiles, so that no binary
+// lacks it.
+//
 //go:embed dist
 var dist embed.FS
 
