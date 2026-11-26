@@ -58,6 +58,11 @@ export const en = {
     add: "Add site",
     import: "Import",
     export: "Export",
+    exportYamlText: "All sites, to import here again or keep as a backup.",
+    exportNginx: "nginx configuration",
+    exportNginxText:
+      "What nginx gets from the enabled sites, as proxy.conf to include.",
+    exportFailed: "The nginx configuration could not be exported",
     domains: "Domains",
     upstream: "Upstream",
     noMainRoute: "Routes only",

@@ -58,6 +58,11 @@ export const zh: Messages = {
     add: "添加站点",
     import: "导入",
     export: "导出",
+    exportYamlText: "所有站点，可以再导入到这里，或作为备份。",
+    exportNginx: "nginx 配置",
+    exportNginxText:
+      "已启用的站点生成的 nginx 配置，保存为可 include 的 proxy.conf。",
+    exportFailed: "无法导出 nginx 配置",
     domains: "域名",
     upstream: "上游",
     noMainRoute: "仅路由",

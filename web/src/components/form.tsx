@@ -15,6 +15,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import {
   Field,
   FieldContent,
@@ -250,6 +251,35 @@ export function ConfirmButton({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  )
+}
+
+// MenuItem is an item of a dropdown menu with an icon and an explanation.
+export function MenuItem({
+  icon,
+  title,
+  text,
+  disabled,
+  onSelect,
+}: {
+  icon: ReactNode
+  title: string
+  text: string
+  disabled?: boolean
+  onSelect: () => void
+}) {
+  return (
+    <DropdownMenuItem
+      disabled={disabled}
+      onSelect={onSelect}
+      className="items-start gap-3 py-2"
+    >
+      <span className="mt-0.5">{icon}</span>
+      <span className="flex flex-col gap-0.5">
+        <span className="font-medium">{title}</span>
+        <span className="text-xs text-muted-foreground">{text}</span>
+      </span>
+    </DropdownMenuItem>
   )
 }
 

@@ -4,7 +4,10 @@ import {
   ArrowUp,
   ArrowUpDown,
   CircleAlert,
+  ChevronDown,
   Download,
+  FileCode,
+  FileText,
   FileUp,
   Globe,
   LayoutGrid,
@@ -18,7 +21,12 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { ConfirmButton, IconButton, PageHeader } from "@/components/form"
+import {
+  ConfirmButton,
+  IconButton,
+  MenuItem,
+  PageHeader,
+} from "@/components/form"
 import { ImportDialog } from "@/components/import-dialog"
 import { SiteDialog } from "@/components/site-dialog"
 import { Badge } from "@/components/ui/badge"
@@ -32,6 +40,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Empty,
   EmptyContent,
@@ -230,6 +243,18 @@ export function SitesPage({
     edit(null, site)
   }
 
+  // exportNginx downloads the configuration generated from the stored
+  // sites, as nginx gets it.
+  const exportNginx = async () => {
+    try {
+      downloadText("proxy.conf", await api.nginxConf())
+    } catch (err) {
+      toast.error(t.sites.exportFailed, {
+        description: errorOf(err).message,
+      })
+    }
+  }
+
   const noMatches = (
     <span className="text-muted-foreground">{t.sites.noMatches}</span>
   )
@@ -248,19 +273,34 @@ export function SitesPage({
               <FileUp />
               {t.sites.import}
             </Button>
-            <Button
-              variant="outline"
-              disabled={rows.length === 0}
-              onClick={() =>
-                downloadText(
-                  "config.yaml",
-                  toYaml(rows.map(({ site }) => site))
-                )
-              }
-            >
-              <Download />
-              {t.sites.export}
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" disabled={rows.length === 0}>
+                  <Download />
+                  {t.sites.export}
+                  <ChevronDown />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72">
+                <MenuItem
+                  icon={<FileText />}
+                  title="config.yaml"
+                  text={t.sites.exportYamlText}
+                  onSelect={() =>
+                    downloadText(
+                      "config.yaml",
+                      toYaml(rows.map(({ site }) => site))
+                    )
+                  }
+                />
+                <MenuItem
+                  icon={<FileCode />}
+                  title={t.sites.exportNginx}
+                  text={t.sites.exportNginxText}
+                  onSelect={exportNginx}
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button onClick={() => edit(null)}>
               <Plus />
               {t.sites.add}

@@ -21,7 +21,12 @@ import {
   CertificateInfoDialog,
   ShortId,
 } from "@/components/certificate-info"
-import { ConfirmButton, IconButton, PageHeader } from "@/components/form"
+import {
+  ConfirmButton,
+  IconButton,
+  MenuItem,
+  PageHeader,
+} from "@/components/form"
 import { IssueDialog } from "@/components/issue-dialog"
 import { SignDialog } from "@/components/sign-dialog"
 import { UploadDialog } from "@/components/upload-dialog"
@@ -32,7 +37,6 @@ import { Card } from "@/components/ui/card"
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -515,34 +519,6 @@ function IdCell({ id }: { id?: string }) {
     <ShortId id={id} />
   ) : (
     <span className="px-1.5 text-xs text-muted-foreground">—</span>
-  )
-}
-
-function MenuItem({
-  icon,
-  title,
-  text,
-  disabled,
-  onSelect,
-}: {
-  icon: ReactNode
-  title: string
-  text: string
-  disabled?: boolean
-  onSelect: () => void
-}) {
-  return (
-    <DropdownMenuItem
-      disabled={disabled}
-      onSelect={onSelect}
-      className="items-start gap-3 py-2"
-    >
-      <span className="mt-0.5">{icon}</span>
-      <span className="flex flex-col gap-0.5">
-        <span className="font-medium">{title}</span>
-        <span className="text-xs text-muted-foreground">{text}</span>
-      </span>
-    </DropdownMenuItem>
   )
 }
 
