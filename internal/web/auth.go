@@ -69,15 +69,23 @@ func userOf(r *http.Request) signedIn {
 }
 
 // guard serves requests with next if they have the access needed. Users
-// are signed in by the session cookie, or, for scripts, by their username
-// and password with HTTP Basic auth.
+// are signed in by the session cookie, or, for scripts and MCP clients, by
+// an API token (Authorization: Bearer), or by their username and password
+// with HTTP Basic auth.
+//
+// Requests that the MCP tools make in-process carry their user in their
+// context already, and only need the access.
 func (h *handler) guard(level access, next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if level == public {
 			next(w, r)
 			return
 		}
-		s, err := h.authenticate(r)
+		s, internal := r.Context().Value(signedInKey{}).(signedIn)
+		var err error
+		if !internal {
+			s, err = h.authenticate(r)
+		}
 		if err != nil {
 			if errors.Is(err, auth.ErrUnauthenticated) {
 				clearCookie(w, r, sessionCookie)
@@ -96,6 +104,10 @@ func (h *handler) guard(level access, next http.HandlerFunc) http.Handler {
 }
 
 func (h *handler) authenticate(r *http.Request) (signedIn, error) {
+	if scheme, secret, ok := strings.Cut(r.Header.Get("Authorization"), " "); ok && strings.EqualFold(scheme, "Bearer") {
+		u, err := h.auth.AuthenticateToken(r.Context(), strings.TrimSpace(secret))
+		return signedIn{user: u}, err
+	}
 	if username, password, ok := r.BasicAuth(); ok {
 		u, err := h.auth.Login(r.Context(), username, password, h.clientOf(r))
 		return signedIn{user: u}, err

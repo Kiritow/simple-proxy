@@ -151,7 +151,7 @@ func TestMigrationAddsInitialVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, stmt := range []string{`DROP TABLE site_versions`, `PRAGMA user_version = 6`} {
+	for _, stmt := range []string{`DROP TABLE site_versions`, `DROP TABLE api_tokens`, `PRAGMA user_version = 6`} {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}

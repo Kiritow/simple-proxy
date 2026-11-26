@@ -103,6 +103,7 @@ test("problem codes match those of the server", () => {
     "wrong_password",
     "invalid_role",
     "site_not_found",
+    "too_long",
   ]
   for (const [lang, messages] of Object.entries(languages)) {
     assert.deepEqual(

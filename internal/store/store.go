@@ -248,6 +248,20 @@ var migrations = [][]string{
 		`INSERT INTO site_versions (site_id, generation, kind, config, author, created_at)
 			SELECT id, generation, 'initial', config, '', updated_at FROM sites ORDER BY position`,
 	},
+	{
+		// Personal API tokens, for scripts and MCP clients acting as users.
+		`CREATE TABLE api_tokens (
+			id           TEXT PRIMARY KEY,
+			hash         TEXT NOT NULL UNIQUE,
+			user_id      TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+			name         TEXT NOT NULL,
+			prefix       TEXT NOT NULL,
+			created_at   TEXT NOT NULL,
+			last_used_at TEXT NOT NULL,
+			expires_at   TEXT NOT NULL
+		) STRICT`,
+		`CREATE INDEX api_tokens_user ON api_tokens (user_id)`,
+	},
 }
 
 // migrate upgrades the schema. Foreign keys are off meanwhile, as SQLite

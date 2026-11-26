@@ -183,6 +183,39 @@ before a day. The latest version of each site is never cleared, as it is the
 site's current configuration. Without super administrators in the
 configuration file, all administrators can.
 
+### AI assistants (MCP)
+
+AI assistants such as Claude Code manage the sites through the Model Context
+Protocol: the console serves MCP at `/mcp` (Streamable HTTP), next to its
+API. An assistant acts as a user, with an API token that the user creates in
+the account menu ("API tokens"), which also shows how to set up clients:
+
+```bash
+claude mcp add --transport http simple-proxy http://127.0.0.1:8081/mcp \
+  --header "Authorization: Bearer sp_..."
+```
+
+The assistant may do exactly what the token's user may do in the console:
+its tools make the same API requests, which are checked the same way, and
+it only gets the tools that the user's role allows.
+
+| Tools | For |
+| ----- | --- |
+| `whoami`, `list_sites`, `get_site`, `preview_site`, `update_site`, `set_site_enabled`, `get_status`, `list_certificates`, `get_certificate`, `list_authorities` | Everyone with a role; site operators only see and change their sites, and not their raw configuration or extra directives. |
+| `create_site`, `delete_site`, `get_nginx_config`, `apply_sites` | Platform operators and administrators. |
+| `issue_certificate`, `sign_certificate`, `upload_certificate`, `rename_certificate`, `delete_certificate` | Administrators. |
+
+`preview_site` checks a change without saving it, and shows the nginx
+configuration of the site with a diff, and `update_site` saves it based on
+the site's generation, so that the assistant does not overwrite changes made
+meanwhile. Changes are applied to nginx right away, and kept as versions by
+the user, like those made in the console.
+
+Tokens work for the HTTP API as well (`curl -H "Authorization: Bearer
+sp_..."`). They expire after the time chosen (30 days to never), stop
+working once revoked or their user is disabled, and are stored as hashes:
+their secret is shown once.
+
 ### How changes are applied
 
 On every change, and once on startup, the configuration of all enabled sites
@@ -380,7 +413,8 @@ The console is built on this API, which scripts can use as well. A site's
 `config` is one entry of `servers` above, in JSON.
 
 Requests need a signed-in user: the browser's session cookie, or for
-scripts, a username and password with HTTP Basic auth (`curl -u`). Otherwise
+scripts, an [API token](#ai-assistants-mcp) (`Authorization: Bearer sp_...`),
+or a username and password with HTTP Basic auth (`curl -u`). Otherwise
 they fail with `401`, and with `403` if the user's role does not allow them
 (see [Users and roles](#users-and-roles)). Site operators only get, change and
 preview their own sites.
@@ -391,7 +425,11 @@ preview their own sites.
 | `POST /api/auth/login`    | Sign in: `{"username": "...", "password": "..."}` gives `{"user": {...}, "permissions": {...}}` and the session cookie. |
 | `POST /api/auth/register` | Sign up, if open: `{"username": "...", "password": "...", "display_name": "..."}`. |
 | `POST /api/auth/logout`   | Sign out. |
-| `GET /api/auth/me`        | The signed-in user, and what they may do: `{"user": {...}, "permissions": {"sites": true, "all_sites": false, "certificates": false, "users": false}}`. |
+| `GET /api/auth/me`        | The signed-in user, and what they may do: `{"user": {...}, "permissions": {"sites": true, "all_sites": false, "certificates": false, "users": false, "history": false}}`. |
+| `GET /api/auth/tokens`    | Your API tokens: `{"tokens": [{"id": "...", "name": "...", "prefix": "sp_ABCD", "created_at": "...", "last_used_at": "...", "expires_at": "..."}]}`. |
+| `POST /api/auth/tokens`   | Create one: `{"name": "...", "expires_in_days": 90}` (0 for never) gives `{"token": {...}, "secret": "sp_..."}`, the only time the secret is shown. |
+| `DELETE /api/auth/tokens/{id}` | Revoke one of yours. |
+| `POST /mcp`               | [MCP](#ai-assistants-mcp), for AI assistants. |
 | `POST /api/auth/password` | Change your password: `{"current": "...", "password": "..."}`. |
 | `GET /api/auth/oidc/login` | Sign in with the OIDC provider, which sends the browser back to `/api/auth/oidc/callback`. |
 | `GET /api/users`          | Administrators: the users, `{"users": [{"id": "...", "username": "...", "role": "site_operator", "sites": ["..."], "method": "password", "managed": false, ...}]}`. |
@@ -461,7 +499,7 @@ internal/certs     uploaded certificates and CAs: parsing, signing, files
 internal/store     SQLite storage of sites, certificates, CAs, users and sessions (modernc.org/sqlite, no cgo)
 internal/auth      users: passwords, OIDC, sessions, roles, and the configuration file
 internal/manager   site and certificate changes: check, apply, then store
-internal/web       HTTP API, embeds the UI from internal/web/dist
+internal/web       HTTP API and MCP (mcp.go), embeds the UI from internal/web/dist
 web/               UI: React, Tailwind CSS and shadcn/ui
 web/src/lib/i18n/  the UI's messages in English (en.ts) and Chinese (zh.ts)
 Dockerfile         the image with nginx and acme.sh; docker/entrypoint.sh runs them

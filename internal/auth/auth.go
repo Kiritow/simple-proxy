@@ -141,6 +141,8 @@ const (
 	InvalidRole      ProblemCode = "invalid_role"
 	SiteNotFound     ProblemCode = "site_not_found"
 	TooLong          ProblemCode = "too_long"
+	Required         ProblemCode = "required"
+	InvalidDays      ProblemCode = "invalid_days"
 )
 
 var problemText = map[ProblemCode]string{
@@ -151,6 +153,8 @@ var problemText = map[ProblemCode]string{
 	InvalidRole:      "%q is not a role",
 	SiteNotFound:     "there is no site %q",
 	TooLong:          "is too long",
+	Required:         "is required",
+	InvalidDays:      "%q is not a number of days from 0 (never expires) to 3650",
 }
 
 // Problem is a problem with a field of a request, reported as a

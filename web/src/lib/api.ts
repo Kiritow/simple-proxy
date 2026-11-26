@@ -264,6 +264,36 @@ export type AuthConfig = {
 
 export type Settings = { registration: boolean }
 
+// ApiToken lets scripts and AI assistants (over MCP) act as the account
+// that created it, with exactly its permissions. Requests send its secret
+// as "Authorization: Bearer <secret>".
+export type ApiToken = {
+  id: string
+  name: string // what it is for
+  prefix: string // the start of the secret, such as "sp_7KQ2M"
+  created_at: string
+  last_used_at?: string // absent if never used
+  expires_at?: string // absent if it never expires
+}
+
+// NewApiToken is a token just created, with its secret, which is not shown
+// again.
+export type NewApiToken = { token: ApiToken; secret: string }
+
+// consoleUrl returns the address of the console, which may live under a
+// path prefix, without the fragment the UI routes with.
+export function consoleUrl(): string {
+  const url = new URL(".", location.href)
+  url.hash = ""
+  url.search = ""
+  return url.href
+}
+
+// mcpUrl returns the address of the MCP endpoint of the console.
+export function mcpUrl(): string {
+  return new URL("mcp", consoleUrl()).href
+}
+
 // NewUser is a password account to add.
 export type NewUser = {
   username: string
@@ -506,6 +536,21 @@ export const api = {
       method: "POST",
       json: { before },
     }).then((r) => r.deleted),
+
+  // tokens lists the API tokens of the signed-in account, newest first.
+  tokens: () =>
+    request<{ tokens: ApiToken[] }>("api/auth/tokens").then((r) => r.tokens),
+  // createToken creates an API token expiring in the given number of days,
+  // or never for 0. Its secret is only ever returned here.
+  createToken: (name: string, expiresInDays: number) =>
+    request<NewApiToken>("api/auth/tokens", {
+      method: "POST",
+      json: { name, expires_in_days: expiresInDays },
+    }),
+  deleteToken: (id: string) =>
+    request<void>(`api/auth/tokens/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 
   validate: (config: ConfigJSON, signal?: AbortSignal) =>
     request<void>("api/validate", { method: "POST", json: config, signal }),

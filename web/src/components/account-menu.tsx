@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from "react"
-import { CircleAlert, CircleUser, KeyRound, LogOut } from "lucide-react"
+import { Bot, CircleAlert, CircleUser, KeyRound, LogOut } from "lucide-react"
 import { toast } from "sonner"
 
 import { TextField } from "@/components/form"
+import { TokensDialog } from "@/components/tokens-dialog"
 import { Alert, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -28,11 +29,13 @@ import { api, errorOf, type ApiError } from "@/lib/api"
 import { displayName, useAuth } from "@/lib/auth"
 import { describeError, useI18n } from "@/lib/i18n"
 
-// AccountMenu shows who is signed in, changes their password and signs out.
+// AccountMenu shows who is signed in, changes their password, manages their
+// API tokens and signs out.
 export function AccountMenu() {
   const { t } = useI18n()
   const { me, signOut } = useAuth()
   const [changing, setChanging] = useState<{ key: number } | null>(null)
+  const [tokens, setTokens] = useState<{ key: number } | null>(null)
   const user = me.user
   const name = displayName(user)
   const canChangePassword = user.method === "password" && !user.password_managed
@@ -61,6 +64,10 @@ export function AccountMenu() {
               {t.account.changePassword}
             </DropdownMenuItem>
           )}
+          <DropdownMenuItem onSelect={() => setTokens({ key: Date.now() })}>
+            <Bot />
+            {t.tokens.menu}
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={signOut}>
             <LogOut />
             {t.auth.signOut}
@@ -72,6 +79,13 @@ export function AccountMenu() {
           key={changing.key}
           open
           onOpenChange={(o) => !o && setChanging(null)}
+        />
+      )}
+      {tokens && (
+        <TokensDialog
+          key={tokens.key}
+          open
+          onOpenChange={(o) => !o && setTokens(null)}
         />
       )}
     </>

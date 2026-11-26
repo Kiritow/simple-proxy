@@ -4,6 +4,7 @@ import {
   api,
   errorOf,
   type ApiError,
+  type ApiToken,
   type Authority,
   type AuthorityDetails,
   type CertificateDetails,
@@ -73,6 +74,9 @@ export const useAuthorities = (): Resource<Authority[]> =>
 export const useUsers = (): Resource<User[]> => useResource(api.users)
 
 export const useSettings = (): Resource<Settings> => useResource(api.settings)
+
+// useTokens loads the API tokens of the signed-in account.
+export const useTokens = (): Resource<ApiToken[]> => useResource(api.tokens)
 
 // loadVersionStats counts the versions by the browser's calendar days.
 const loadVersionStats = () => api.versionStats(-new Date().getTimezoneOffset())

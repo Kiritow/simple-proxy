@@ -67,6 +67,10 @@ type Options struct {
 //	POST   /api/auth/logout    sign out
 //	GET    /api/auth/me        the signed-in user and what they may do: {"user": {...}, "permissions": {...}}
 //	POST   /api/auth/password  change your password: {"current": "...", "password": "..."}
+//	GET    /api/auth/tokens    your API tokens: {"tokens": [{"id": "...", "name": "...", "prefix": "sp_ABCD", ...}]}
+//	POST   /api/auth/tokens    create one: {"name": "...", "expires_in_days": 90} gives {"token": {...}, "secret": "sp_..."}
+//	DELETE /api/auth/tokens/{id}  revoke one
+//	POST   /mcp                MCP (Streamable HTTP): tools to manage the sites as you, see mcpHandler
 //	GET    /api/auth/oidc/login     sign in with the OIDC provider
 //	GET    /api/auth/oidc/callback  where the provider sends users back; failures go to the console with ?login_error=code
 //	GET    /api/users          the users: {"users": [{"id": "...", "username": "...", "role": "site_operator", "sites": ["..."], ...}]}
@@ -164,6 +168,11 @@ func NewHandler(opts Options) http.Handler {
 	mux.Handle("GET /api/auth/oidc/callback", g(public, h.oidcCallback))
 	mux.Handle("GET /api/auth/me", g(account, h.me))
 	mux.Handle("POST /api/auth/password", g(account, h.changePassword))
+	mux.Handle("GET /api/auth/tokens", g(account, h.listTokens))
+	mux.Handle("POST /api/auth/tokens", g(account, h.createToken))
+	mux.Handle("DELETE /api/auth/tokens/{id}", g(account, h.deleteToken))
+	// The MCP tools make their requests to the API through mux.
+	mux.Handle("/mcp", g(account, h.mcpHandler(mux).ServeHTTP))
 
 	mux.Handle("GET /api/users", g(usersAccess, h.listUsers))
 	mux.Handle("POST /api/users", g(usersAccess, h.createUser))
@@ -717,7 +726,7 @@ func (h *handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		if status == 0 {
 			status = http.StatusForbidden
 		}
-	case errors.Is(err, auth.ErrUserNotFound):
+	case errors.Is(err, auth.ErrUserNotFound), errors.Is(err, auth.ErrTokenNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, nginx.ErrCertNotFound):
 		status = http.StatusUnprocessableEntity
