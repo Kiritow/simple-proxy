@@ -83,11 +83,12 @@ func (g *Generator) Generate(ctx context.Context, cfg *config.Config) ([]byte, e
 
 	var buf bytes.Buffer
 	err = confTemplate.Execute(&buf, confData{
-		GeneratedAt:   now(),
-		FallbackCert:  quote(cmp.Or(g.FallbackCert, DefaultFallbackCert)),
-		FallbackKey:   quote(cmp.Or(g.FallbackKey, DefaultFallbackKey)),
-		ACMEChallenge: g.acmeChallenge(),
-		Servers:       servers,
+		GeneratedAt:               now(),
+		ServerNamesHashBucketSize: bucketSize(cfg),
+		FallbackCert:              quote(cmp.Or(g.FallbackCert, DefaultFallbackCert)),
+		FallbackKey:               quote(cmp.Or(g.FallbackKey, DefaultFallbackKey)),
+		ACMEChallenge:             g.acmeChallenge(),
+		Servers:                   servers,
 	})
 	if err != nil {
 		return nil, err
@@ -96,11 +97,14 @@ func (g *Generator) Generate(ctx context.Context, cfg *config.Config) ([]byte, e
 }
 
 type confData struct {
-	GeneratedAt   time.Time
-	FallbackCert  string
-	FallbackKey   string
-	ACMEChallenge *location // nil without ACMEWebroot
-	Servers       []server
+	GeneratedAt time.Time
+	// ServerNamesHashBucketSize is set if nginx's default is too small for
+	// the longest server name.
+	ServerNamesHashBucketSize int
+	FallbackCert              string
+	FallbackKey               string
+	ACMEChallenge             *location // nil without ACMEWebroot
+	Servers                   []server
 }
 
 type server struct {
@@ -171,6 +175,33 @@ func (g *Generator) servers(ctx context.Context, cfg *config.Config) ([]server, 
 		out = append(out, srv)
 	}
 	return out, nil
+}
+
+// defaultBucketSize is nginx's server_names_hash_bucket_size on most CPUs.
+const defaultBucketSize = 64
+
+// bucketSize returns the server_names_hash_bucket_size that the server names
+// of cfg need, or 0 if nginx's default suffices. nginx stores a name with a
+// pointer and its length, aligned to pointers, and needs room for another
+// pointer at the end of a bucket.
+func bucketSize(cfg *config.Config) int {
+	longest := 0
+	for _, s := range cfg.Servers {
+		if s.Enabled() {
+			for _, name := range strings.Fields(s.ServerName) {
+				longest = max(longest, len(name))
+			}
+		}
+	}
+	need := (8+2+longest+7)/8*8 + 8
+	if need <= defaultBucketSize {
+		return 0
+	}
+	size := defaultBucketSize
+	for size < need {
+		size *= 2
+	}
+	return size
 }
 
 func (g *Generator) locateCert(ctx context.Context, name string) (Certificate, error) {

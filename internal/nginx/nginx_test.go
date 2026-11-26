@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -145,5 +146,36 @@ servers:
 	}
 	if certs.lookups != 1 {
 		t.Errorf("certificate looked up %d times, want 1", certs.lookups)
+	}
+}
+
+// TestLongServerNames: nginx refuses names too long for its hash buckets,
+// "could not build server_names_hash", unless they are made larger.
+func TestLongServerNames(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{"stablecoin.example.com", ""},
+		{strings.Repeat("a", 34) + ".example.com", ""}, // 46 characters, the most that fit
+		{strings.Repeat("a", 35) + ".example.com", "server_names_hash_bucket_size 128;"},
+		{"stablecoin-ops-console.szdev.infra.fomo.solutions", "server_names_hash_bucket_size 128;"},
+		{strings.Repeat("a", 120) + ".example.com", "server_names_hash_bucket_size 256;"},
+	} {
+		cfg, err := config.Parse([]byte("servers:\n- server_name: short.example.com " + tc.name + "\n  default: {port: 1}\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		conf, err := newGenerator(nil).Generate(t.Context(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ""
+		if m := regexp.MustCompile(`server_names_hash_bucket_size \d+;`).Find(conf); m != nil {
+			got = string(m)
+		}
+		if got != tc.want {
+			t.Errorf("%d characters: %q, want %q", len(tc.name), got, tc.want)
+		}
 	}
 }

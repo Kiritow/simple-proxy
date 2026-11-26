@@ -1,5 +1,8 @@
 {{- /* Rendered with confData. Directives are printed with directive.String. */ -}}
 # Auto generated at {{ .GeneratedAt.Format "2006-01-02 15:04:05" }}
+{{- with .ServerNamesHashBucketSize }}
+server_names_hash_bucket_size {{ . }};
+{{- end }}
 map $http_upgrade $connection_upgrade {
   default upgrade;
   "" close;

@@ -207,6 +207,10 @@ HTTPS servers get a companion server on port 80 that redirects to HTTPS.
 Unknown fields are rejected, and all problems are reported at once. Options
 must be single directives: `;`, `{`, `}` and `#` have to be quoted or escaped.
 
+When server names are too long for nginx's default
+`server_names_hash_bucket_size`, the configuration sets a larger one; it must
+then not be set elsewhere in nginx's configuration.
+
 ## HTTP API
 
 The console is built on this API, which scripts can use as well. A site's
