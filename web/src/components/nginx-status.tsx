@@ -6,6 +6,7 @@ import { toast } from "sonner"
 import { CodeBlock, NginxCode } from "@/components/code-view"
 import { Output } from "@/components/form"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -58,6 +59,7 @@ export function StatusButton({
       variant="ghost"
       size="sm"
       onClick={onClick}
+      title={status.data?.nginx?.version}
       className={cn(state === "error" && "text-destructive")}
     >
       <span
@@ -103,7 +105,14 @@ export function StatusDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[90svh] flex-col sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{t.status.title}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            {t.status.title}
+            {s?.applies && s.nginx && (
+              <Badge variant="secondary" className="font-mono">
+                {s.nginx.version}
+              </Badge>
+            )}
+          </DialogTitle>
           <DialogDescription>
             {s?.applies ? t.status.description : t.status.notApplyingText}
           </DialogDescription>
@@ -130,6 +139,9 @@ export function StatusDialog({
               <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[auto_1fr]">
                 {s.applies && (
                   <>
+                    <Item term={t.status.version}>
+                      <NginxVersion status={s} />
+                    </Item>
                     <Item term={t.status.configFile} mono>
                       {s.config_path}
                     </Item>
@@ -178,6 +190,41 @@ export function StatusDialog({
         )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+// NginxVersion shows the version of nginx, with how it was built, or why it
+// is not known.
+function NginxVersion({ status: s }: { status: Status }) {
+  const { t } = useI18n()
+  if (!s.nginx) {
+    return (
+      <div className="flex flex-col gap-1">
+        <span>{t.status.versionUnknown}</span>
+        {s.nginx_error ? (
+          <Output>{s.nginx_error}</Output>
+        ) : (
+          !s.version_command && (
+            <span className="text-xs text-muted-foreground">
+              {t.status.noVersionCommand}
+            </span>
+          )
+        )}
+      </div>
+    )
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="font-mono text-xs leading-5">{s.nginx.version}</span>
+      {s.nginx.build && (
+        <details>
+          <summary className="cursor-pointer text-xs text-muted-foreground select-none hover:text-foreground">
+            {t.status.buildDetails}
+          </summary>
+          <Output>{s.nginx.build}</Output>
+        </details>
+      )}
+    </div>
   )
 }
 

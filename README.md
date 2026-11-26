@@ -57,6 +57,7 @@ is available. It also cross-compiles: `./build.sh linux/arm64` or
 | `-nginx-conf`    | none                    | The configuration file to manage, which nginx must include in its `http` block. Without it, sites are only stored. |
 | `-nginx-test`    | `nginx -t`              | Command testing nginx's configuration. |
 | `-nginx-reload`  | `nginx -s reload`       | Command reloading nginx; acme.sh also runs it after renewing certificates. |
+| `-nginx-version` | `-nginx-test` with `-V` for `-t` | Command printing nginx's version and build like `nginx -V`, shown in the console, e.g. `podman exec nginx nginx -V` for `podman exec nginx nginx -t`. |
 | `-acme`          | `~/.acme.sh/acme.sh`    | The acme.sh script. Without it, only uploaded and signed certificates are available. |
 | `-acme-webroot`  | none                    | Directory that nginx serves at `/.well-known/acme-challenge/` on port 80, to request certificates over HTTP. Without it, only DNS validation is available. |
 | `-fallback-cert` | `/certs/fallback.cer`   | Certificate presented to HTTPS requests for unknown hosts. |
@@ -71,9 +72,11 @@ On every change, and once on startup, the configuration of all enabled sites
 is written to `-nginx-conf`, tested with `-nginx-test`, and loaded with
 `-nginx-reload`. If the test or the reload fails, the previous file is
 restored, so the file always holds a configuration nginx accepted. The header
-shows whether nginx runs the stored sites; its dialog shows the commands, the
-last error and the generated configuration, and can apply the sites again,
-e.g. after nginx restarted.
+shows whether nginx runs the stored sites; its dialog shows nginx's version
+and build (OpenSSL, configure arguments), the commands, the last error and
+the generated configuration, and can apply the sites again, e.g. after nginx
+restarted. The version is found out with `-nginx-version` on startup and
+whenever the sites are applied again, so upgrades show up then.
 
 The configuration always contains catch-all servers that reject requests for
 unknown hosts on ports 80 and 443. The latter needs a certificate, e.g. a
@@ -108,6 +111,18 @@ certificates with their chain in any order (the root is not served), and
 unencrypted PKCS #1, PKCS #8 or SEC 1 keys, in the same text or separately.
 Signed certificates use a new ECDSA P-256 or RSA 2048 key, and the CA's
 chain without its root.
+
+Certificates and CAs added here also get an ID, a UUID that stays the same
+when they are renamed or replaced; the lists show its start, and copy all of
+it on click. Their details (ID, serial number, SHA-256 fingerprint, validity,
+chain, the sites using them, and the files nginx reads) open from the lists.
+Renaming a certificate changes the sites using it, by `cert_name`, by
+default, or with `{{cert "..."}}` and `{{key "..."}}` in a raw
+configuration, to refer to it by its new name, so they keep serving it;
+renaming a CA does the same for the certificates it signed, so it can still
+renew them.
+acme.sh's certificates show their details too, read from acme.sh's files, but
+keep the names acme.sh gives them.
 
 ### Docker image
 
@@ -250,17 +265,21 @@ The console is built on this API, which scripts can use as well. A site's
 | `POST /api/sites/raw` | The configuration the builder generates for a site, as raw configuration: `{"config": {...}}` gives `{"raw": "..."}`. |
 | `POST /api/sites/preview` | What saving a site would change, without saving it: `{"id": "...", "config": {...}}` (no `id` for a new site) gives `{"current": "...", "proposed": "...", "generation": 1}`. |
 | `PUT /api/sites`          | Replace all sites: `{"configs": [{...}]}`. |
-| `GET /api/status`         | How sites are applied to nginx, and the last error. |
+| `GET /api/status`         | How sites are applied to nginx, the last error, and nginx's version: `"nginx": {"version": "nginx/1.27.3", "build": "..."}`, or `"nginx_error"` if it could not be found out. |
 | `POST /api/apply`         | Apply the stored sites again. |
 | `GET /api/nginx.conf`     | The configuration generated from the sites. |
-| `GET /api/certificates`   | All certificates: `{"certificates": [{"name": "...", "source": "acme", ...}], "acme_error": "..."}`, where `source` is `acme`, `uploaded` or `signed`. |
+| `GET /api/certificates`   | All certificates: `{"certificates": [{"id": "...", "name": "...", "source": "uploaded", ...}], "acme_error": "..."}`, where `source` is `acme`, `uploaded` or `signed`; acme.sh's have no `id`. |
+| `GET /api/certificates/{name}` | One in full: its list entry with `subject`, `not_before`, `serial`, `sha256`, `chain`, `cert_file`, `key_file` and the `sites` using it (`[{"id": "...", "name": "...", "enabled": true}]`). |
+| `PATCH /api/certificates/{name}` | Rename an uploaded or signed one: `{"name": "..."}`. Sites using it follow. |
 | `POST /api/certificates`  | Request one from acme.sh: `{"domains": ["example.com"], "dns": "dns_cf"}`; without `dns`, over HTTP. |
 | `POST /api/certificates/upload` | Upload one: `{"name": "...", "cert": "PEM", "key": "PEM", "replace": false}`; without `name`, it is named after its first domain. |
 | `POST /api/certificates/sign` | Have a CA sign one: `{"authority": "...", "domains": ["nas.lan"], "days": 365, "key_type": "ec", "name": "...", "replace": false}`; `key_type` is `ec` or `rsa`. |
 | `POST /api/certificates/upload/preview`, `/sign/preview` | What uploading or signing would store, without storing it: `{"name": "...", "subject": "...", "issuer": "...", "domains": [...], "not_after": "...", "chain": [...], "has_key": true, "problems": [...]}`, as far as it can be read, with the problems that would make it fail. |
 | `DELETE /api/certificates/{name}` | Delete an uploaded or signed certificate that no enabled site uses. |
-| `GET /api/authorities`    | The CAs: `{"authorities": [{"name": "...", "subject": "...", "expires": "...", "signed": 1}]}`. |
+| `GET /api/authorities`    | The CAs: `{"authorities": [{"id": "...", "name": "...", "subject": "...", "expires": "...", "signed": 1}]}`. |
 | `POST /api/authorities`   | Upload a CA: `{"name": "...", "cert": "PEM", "key": "PEM"}`; without `name`, it is named after its common name. `POST /api/authorities/preview` previews it. |
+| `GET /api/authorities/{name}` | One CA in full, with `serial`, `sha256`, `chain` and the names of the `certificates` it signed. |
+| `PATCH /api/authorities/{name}` | Rename a CA: `{"name": "..."}`. The certificates it signed follow. |
 | `DELETE /api/authorities/{name}` | Delete a CA; the certificates it signed stay. |
 | `GET /api/authorities/{name}/cert.pem` | The CA's certificate, to install on clients. |
 | `POST /api/generate`      | The configuration generated from a YAML or JSON configuration, without storing anything. |

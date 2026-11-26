@@ -28,6 +28,10 @@ export const en = {
       "Sites are only stored. Start the server with -nginx-conf to apply them to nginx.",
     outOfDateText:
       "nginx may not run the stored sites, because applying them failed:",
+    version: "Version",
+    versionUnknown: "Unknown",
+    noVersionCommand: "Start the server with -nginx-version to show it.",
+    buildDetails: "Build details",
     configFile: "Configuration file",
     testCommand: "Test command",
     reloadCommand: "Reload command",
@@ -277,6 +281,47 @@ export const en = {
     until: (date: string) => `until ${date}`,
     root: "root",
     rootNotServed: "root, not sent to clients",
+  },
+  // The details of certificates and CAs that were added.
+  info: {
+    show: "Details",
+    sources: {
+      acme: "Issued and renewed by acme.sh",
+      uploaded: "Uploaded certificate",
+      signed: "Signed by your CA",
+    },
+    authority: "Certificate authority",
+    loadFailed: "The details could not be loaded",
+    rename: "Rename",
+    renaming: "Renaming…",
+    renameHint:
+      "Sites using it are changed to the new name, and keep serving it.",
+    renameCAHint:
+      "The certificates it signed are changed to the new name, so that it can still renew them.",
+    renamed: (from: string, to: string) => `Renamed ${from} to ${to}`,
+    acmeName:
+      "acme.sh names its certificates after their first domain; they cannot be renamed.",
+    unreadable:
+      "The files of the certificate could not be read: only what acme.sh lists is shown.",
+    id: "ID",
+    copyId: "Copy ID",
+    copyIdOf: (id: string) => `ID ${id}: click to copy`,
+    renews: "Renews",
+    signedBy: "Signed by",
+    renewal: "Renewal",
+    renewalText: (days: number, key: string) =>
+      `${days} ${days === 1 ? "day" : "days"}, ${key}`,
+    serial: "Serial number",
+    sha256: "SHA-256 fingerprint",
+    copySHA256: "Copy fingerprint",
+    sites: "Used by",
+    noSites: "No sites",
+    disabled: "disabled",
+    signedCerts: "Signed certificates",
+    none: "None",
+    created: "Added",
+    updated: "Last replaced",
+    files: "Files",
   },
   sign: {
     title: "Sign a certificate",

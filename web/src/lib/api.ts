@@ -46,6 +46,10 @@ export type Status = {
   config_path?: string
   test_command?: string
   reload_command?: string
+  // nginx as version_command describes it once known, or why it is not.
+  version_command?: string
+  nginx?: NginxInfo
+  nginx_error?: string
   applied_at?: string
   error?: string
   output?: string
@@ -54,12 +58,21 @@ export type Status = {
   cert_dir: string // where uploaded and signed certificates are written
 }
 
+// NginxInfo describes nginx, as nginx -V does.
+export type NginxInfo = {
+  version: string // such as "nginx/1.27.3"
+  build?: string // e.g. its OpenSSL and configure arguments
+}
+
 export type CertificateSource = "acme" | "uploaded" | "signed"
 
 // KeyType is the type of the key of a signed certificate.
 export type KeyType = "ec" | "rsa"
 
 export type Certificate = {
+  // id identifies an uploaded or signed certificate for good, while its name
+  // may change. acme.sh's certificates have none.
+  id?: string
   name: string
   source: CertificateSource
   domains: string[]
@@ -81,6 +94,7 @@ export type CertificateList = {
 
 // Authority is a certificate authority (CA) that signs certificates.
 export type Authority = {
+  id: string
   name: string
   subject: string
   issuer: string
@@ -88,6 +102,37 @@ export type Authority = {
   created: string
   expires: string
   signed: number // certificates kept that it signed
+}
+
+// SiteRef refers to a site.
+export type SiteRef = {
+  id: string
+  name: string // its first server name, if any
+  enabled: boolean
+  raw?: boolean // configured by a raw configuration
+}
+
+// CertificateDetails describes a certificate in full.
+export type CertificateDetails = Certificate & {
+  subject?: string
+  not_before?: string
+  serial?: string // colon-separated hex bytes
+  sha256?: string // fingerprint, likewise
+  chain: ChainEntry[] // the issuers following the certificate
+  updated?: string
+  cert_file?: string // the files nginx reads
+  key_file?: string
+  sites: SiteRef[] // that serve it, enabled or not
+  problem?: string // acme.sh's files could not be read
+}
+
+// AuthorityDetails describes a CA in full.
+export type AuthorityDetails = Authority & {
+  not_before: string
+  serial: string
+  sha256: string
+  chain: ChainEntry[]
+  certificates: string[] // the names of those it signed
 }
 
 // Upload is a certificate or CA to upload: its PEM chain and private key.
@@ -241,6 +286,15 @@ export const api = {
       json: req,
       signal,
     }),
+  certificate: (name: string) =>
+    request<CertificateDetails>(`api/certificates/${encodeURIComponent(name)}`),
+  // renameCertificate also changes the sites using the certificate to refer
+  // to it by its new name.
+  renameCertificate: (name: string, newName: string) =>
+    request<Certificate>(`api/certificates/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      json: { name: newName },
+    }),
   deleteCertificate: (name: string) =>
     request<void>(`api/certificates/${encodeURIComponent(name)}`, {
       method: "DELETE",
@@ -257,6 +311,14 @@ export const api = {
       method: "POST",
       json: { ...upload, replace: false },
       signal,
+    }),
+  authority: (name: string) =>
+    request<AuthorityDetails>(`api/authorities/${encodeURIComponent(name)}`),
+  // renameAuthority also renames the CA of the certificates it signed.
+  renameAuthority: (name: string, newName: string) =>
+    request<Authority>(`api/authorities/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      json: { name: newName },
     }),
   deleteAuthority: (name: string) =>
     request<void>(`api/authorities/${encodeURIComponent(name)}`, {

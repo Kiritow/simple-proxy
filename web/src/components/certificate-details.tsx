@@ -3,7 +3,7 @@ import { CircleCheck, KeyRound, TriangleAlert } from "lucide-react"
 import { cn } from "cn"
 
 import { Badge } from "@/components/ui/badge"
-import type { CertificatePreview } from "@/lib/api"
+import type { CertificatePreview, ChainEntry } from "@/lib/api"
 import { formatDate } from "@/lib/format"
 import { useI18n } from "@/lib/i18n"
 
@@ -76,24 +76,7 @@ export function CertificateDetails({
             </Row>
           )}
           <Row term={t.details.chain}>
-            {preview.chain.length === 0 ? (
-              <span className="text-muted-foreground">
-                {t.details.chainEmpty}
-              </span>
-            ) : (
-              <ol className="flex flex-col gap-1">
-                {preview.chain.map((c, i) => (
-                  <li key={i} className="flex flex-col">
-                    <span>{c.subject}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {t.details.until(formatDate(c.not_after, lang))}
-                      {c.root &&
-                        ` · ${kind === "authority" ? t.details.root : t.details.rootNotServed}`}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            )}
+            <ChainList chain={preview.chain} authority={kind === "authority"} />
           </Row>
         </dl>
       )}
@@ -101,12 +84,42 @@ export function CertificateDetails({
   )
 }
 
-function Row({ term, children }: { term: string; children: ReactNode }) {
+// Row is a term and its description in a <dl>.
+export function Row({ term, children }: { term: string; children: ReactNode }) {
   return (
     <>
       <dt className="text-muted-foreground">{term}</dt>
       <dd className="min-w-0 break-words">{children}</dd>
     </>
+  )
+}
+
+// ChainList lists the issuers following a certificate, or those following
+// a CA if authority is set.
+export function ChainList({
+  chain,
+  authority,
+}: {
+  chain: ChainEntry[]
+  authority: boolean
+}) {
+  const { t, lang } = useI18n()
+  if (chain.length === 0) {
+    return <span className="text-muted-foreground">{t.details.chainEmpty}</span>
+  }
+  return (
+    <ol className="flex flex-col gap-1">
+      {chain.map((c, i) => (
+        <li key={i} className="flex flex-col">
+          <span>{c.subject}</span>
+          <span className="text-xs text-muted-foreground">
+            {t.details.until(formatDate(c.not_after, lang))}
+            {c.root &&
+              ` · ${authority ? t.details.root : t.details.rootNotServed}`}
+          </span>
+        </li>
+      ))}
+    </ol>
   )
 }
 

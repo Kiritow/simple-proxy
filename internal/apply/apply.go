@@ -28,6 +28,43 @@ type Applier struct {
 	// Reload makes nginx load the configuration, e.g. ["nginx", "-s",
 	// "reload"]. Skipped if empty.
 	Reload []string
+	// Version prints nginx's version and build, e.g. ["nginx", "-V"]. nginx
+	// is not described if empty.
+	Version []string
+}
+
+// Nginx describes the nginx that configuration is applied to, as nginx -V
+// does.
+type Nginx struct {
+	Version string `json:"version"` // such as "nginx/1.27.3"
+	// Build is the rest of the output, such as the OpenSSL nginx was built
+	// with, and its configure arguments.
+	Build string `json:"build,omitempty"`
+}
+
+// ErrNoVersion reports that the Applier has no Version command.
+var ErrNoVersion = errors.New("no command printing nginx's version")
+
+// Nginx runs the Version command and describes nginx from its output.
+func (a *Applier) Nginx(ctx context.Context) (Nginx, error) {
+	if len(a.Version) == 0 {
+		return Nginx{}, ErrNoVersion
+	}
+	out, err := run(ctx, a.Version)
+	if err != nil {
+		if out != "" {
+			err = fmt.Errorf("%w\n%s", err, out)
+		}
+		return Nginx{}, err
+	}
+	// The first line is like "nginx version: nginx/1.27.3", or
+	// "nginx version: openresty/1.25.3.1".
+	first, rest, _ := strings.Cut(out, "\n")
+	_, version, ok := strings.Cut(first, " version: ")
+	if !ok || strings.TrimSpace(version) == "" {
+		return Nginx{}, fmt.Errorf("%s printed no version: %q", strings.Join(a.Version, " "), first)
+	}
+	return Nginx{Version: strings.TrimSpace(version), Build: strings.TrimSpace(rest)}, nil
 }
 
 // Error reports a failed step of Apply.

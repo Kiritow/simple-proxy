@@ -3,6 +3,7 @@ import {
   BadgePlus,
   ChevronDown,
   Download,
+  Info,
   Landmark,
   RefreshCw,
   ShieldCheck,
@@ -15,6 +16,11 @@ import {
 import { toast } from "sonner"
 
 import { Expiry } from "@/components/certificate-details"
+import {
+  AuthorityInfoDialog,
+  CertificateInfoDialog,
+  ShortId,
+} from "@/components/certificate-info"
 import { ConfirmButton, IconButton, PageHeader } from "@/components/form"
 import { IssueDialog } from "@/components/issue-dialog"
 import { SignDialog } from "@/components/sign-dialog"
@@ -62,15 +68,19 @@ type Dialog =
   | { kind: "upload"; replace?: string }
   | { kind: "authority" }
   | { kind: "sign"; authority?: string; renew?: Certificate }
+  | { kind: "info"; name: string } // of a certificate
+  | { kind: "caInfo"; name: string }
 
 export function CertificatesPage({
   certs,
   authorities,
   status,
+  onSitesChanged,
 }: {
   certs: Resource<CertificateList>
   authorities: Resource<Authority[]>
   status: Status | null
+  onSitesChanged: () => void // by renaming a certificate they use
 }) {
   const { t } = useI18n()
   const [dialog, setDialog] = useState<(Dialog & { key: number }) | null>(null)
@@ -79,6 +89,14 @@ export function CertificatesPage({
   const reload = () => {
     certs.reload()
     authorities.reload()
+  }
+  // renamed follows a certificate or CA renamed in its dialog.
+  const renamed = (name: string) => {
+    setDialog((d) =>
+      d?.kind === "info" || d?.kind === "caInfo" ? { ...d, name } : d
+    )
+    reload()
+    if (dialog?.kind === "info") onSitesChanged()
   }
 
   // remove runs a deletion, and reports its outcome.
@@ -183,6 +201,7 @@ export function CertificatesPage({
             <TableHeader>
               <TableRow>
                 <TableHead className="pl-4">{t.certs.name}</TableHead>
+                <TableHead className="max-md:hidden">{t.info.id}</TableHead>
                 <TableHead>{t.certs.domains}</TableHead>
                 <TableHead>{t.certs.issuer}</TableHead>
                 <TableHead className="max-md:hidden">{t.certs.key}</TableHead>
@@ -195,8 +214,15 @@ export function CertificatesPage({
             <TableBody>
               {certs.data.certificates.map((cert) => (
                 <TableRow key={`${cert.source} ${cert.name} ${cert.key}`}>
-                  <TableCell className="max-w-56 pl-4 font-medium break-words whitespace-normal">
-                    {cert.name}
+                  <TableCell className="max-w-56 pl-4 break-words whitespace-normal">
+                    <NameButton
+                      onClick={() => open({ kind: "info", name: cert.name })}
+                    >
+                      {cert.name}
+                    </NameButton>
+                  </TableCell>
+                  <TableCell className="max-md:hidden">
+                    <IdCell id={cert.id} />
                   </TableCell>
                   <TableCell>
                     <div className="flex max-w-72 flex-wrap gap-1">
@@ -228,6 +254,12 @@ export function CertificatesPage({
                     <Validity cert={cert} />
                   </TableCell>
                   <TableCell className="pr-4 text-right whitespace-nowrap">
+                    <IconButton
+                      label={t.info.show}
+                      onClick={() => open({ kind: "info", name: cert.name })}
+                    >
+                      <Info />
+                    </IconButton>
                     {cert.source === "uploaded" && (
                       <IconButton
                         label={t.certs.replace}
@@ -324,6 +356,7 @@ export function CertificatesPage({
             <TableHeader>
               <TableRow>
                 <TableHead className="pl-4">{t.certs.name}</TableHead>
+                <TableHead className="max-md:hidden">{t.info.id}</TableHead>
                 <TableHead>{t.certs.issuer}</TableHead>
                 <TableHead className="max-md:hidden">{t.certs.key}</TableHead>
                 <TableHead>{t.certs.expires}</TableHead>
@@ -337,14 +370,21 @@ export function CertificatesPage({
             </TableHeader>
             <TableBody>
               {cas.map((ca) => (
-                <TableRow key={ca.name}>
-                  <TableCell className="pl-4">
-                    <div className="font-medium">{ca.name}</div>
+                <TableRow key={ca.id}>
+                  <TableCell className="max-w-56 pl-4 break-words whitespace-normal">
+                    <NameButton
+                      onClick={() => open({ kind: "caInfo", name: ca.name })}
+                    >
+                      {ca.name}
+                    </NameButton>
                     {ca.subject !== ca.name && (
                       <div className="text-xs text-muted-foreground">
                         {ca.subject}
                       </div>
                     )}
+                  </TableCell>
+                  <TableCell className="max-md:hidden">
+                    <IdCell id={ca.id} />
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {ca.issuer === ca.subject ? t.certs.selfSigned : ca.issuer}
@@ -359,6 +399,12 @@ export function CertificatesPage({
                     {ca.signed}
                   </TableCell>
                   <TableCell className="pr-4 text-right whitespace-nowrap">
+                    <IconButton
+                      label={t.info.show}
+                      onClick={() => open({ kind: "caInfo", name: ca.name })}
+                    >
+                      <Info />
+                    </IconButton>
                     <IconButton
                       label={t.certs.signWith}
                       onClick={() => open({ kind: "sign", authority: ca.name })}
@@ -424,7 +470,51 @@ export function CertificatesPage({
           onSigned={reload}
         />
       )}
+      {dialog?.kind === "info" && (
+        <CertificateInfoDialog
+          key={dialog.key}
+          name={dialog.name}
+          onOpenChange={(o) => !o && setDialog(null)}
+          onRenamed={renamed}
+        />
+      )}
+      {dialog?.kind === "caInfo" && (
+        <AuthorityInfoDialog
+          key={dialog.key}
+          name={dialog.name}
+          onOpenChange={(o) => !o && setDialog(null)}
+          onRenamed={renamed}
+        />
+      )}
     </div>
+  )
+}
+
+// NameButton is the name of a certificate or CA, which opens its details.
+function NameButton({
+  onClick,
+  children,
+}: {
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-left font-medium underline-offset-4 outline-none hover:underline focus-visible:underline"
+    >
+      {children}
+    </button>
+  )
+}
+
+// IdCell shows the ID of a certificate or CA kept here; acme.sh's have none.
+function IdCell({ id }: { id?: string }) {
+  return id ? (
+    <ShortId id={id} />
+  ) : (
+    <span className="px-1.5 text-xs text-muted-foreground">—</span>
   )
 }
 

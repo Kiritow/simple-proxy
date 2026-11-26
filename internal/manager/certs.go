@@ -33,7 +33,10 @@ const (
 
 // Certificate describes a certificate that sites can use.
 type Certificate struct {
-	// Name identifies the certificate, which sites refer to by name.
+	// ID identifies a certificate kept by the Manager for good, while its
+	// name may change. acme.sh's certificates have none.
+	ID string `json:"id,omitempty"`
+	// Name identifies the certificate too, which sites refer to by name.
 	Name    string   `json:"name"`
 	Source  string   `json:"source"`
 	Domains []string `json:"domains"`
@@ -83,17 +86,22 @@ func (m *Manager) Certificates(ctx context.Context) (CertificateList, error) {
 		return list, nil
 	}
 	for _, c := range issued {
-		list.Certificates = append(list.Certificates, Certificate{
-			Name:    c.Name,
-			Source:  SourceACME,
-			Domains: c.Domains,
-			Key:     c.KeyLength,
-			Issuer:  c.CA,
-			Created: c.Created,
-			Renews:  c.Renew,
-		})
+		list.Certificates = append(list.Certificates, describeACME(c))
 	}
 	return list, nil
+}
+
+// describeACME describes a certificate of acme.sh, as acme.sh lists it.
+func describeACME(c acme.Cert) Certificate {
+	return Certificate{
+		Name:    c.Name,
+		Source:  SourceACME,
+		Domains: c.Domains,
+		Key:     c.KeyLength,
+		Issuer:  c.CA,
+		Created: c.Created,
+		Renews:  c.Renew,
+	}
 }
 
 func describeCert(c store.Cert) (Certificate, error) {
@@ -103,6 +111,7 @@ func describeCert(c store.Cert) (Certificate, error) {
 	}
 	info := certs.Describe(pair)
 	cert := Certificate{
+		ID:      c.ID,
 		Name:    c.Name,
 		Source:  SourceUploaded,
 		Domains: info.Domains,
@@ -388,15 +397,18 @@ func chainOf(chain []*x509.Certificate, from int) []ChainEntry {
 	return out
 }
 
-// putCert stores c, adding it or, if replace is set, replacing the
-// certificate of the same name. Its name must have been checked.
+// putCert stores c, adding it with a new ID or, if replace is set,
+// replacing the certificate of the same name, whose ID it keeps. Its name
+// must have been checked.
 func (m *Manager) putCert(ctx context.Context, c store.Cert, replace bool) (Certificate, error) {
 	err := m.change(ctx, func(st *state) error {
 		i := slices.IndexFunc(st.certs, func(s store.Cert) bool { return s.Name == c.Name })
 		switch {
 		case i < 0:
+			c.ID = store.NewID()
 			st.certs = append(st.certs, c)
 		case replace:
+			c.ID = st.certs[i].ID
 			st.certs[i] = c
 		default: // added meanwhile
 			return certs.FieldError("name", certs.NameInUse, c.Name)
@@ -406,15 +418,25 @@ func (m *Manager) putCert(ctx context.Context, c store.Cert, replace bool) (Cert
 	if err != nil {
 		return Certificate{}, err
 	}
-	stored, err := m.opts.Store.Certs(ctx)
+	stored, err := m.storedCert(ctx, func(s store.Cert) bool { return s.ID == c.ID })
 	if err != nil {
 		return Certificate{}, err
 	}
-	i := slices.IndexFunc(stored, func(s store.Cert) bool { return s.Name == c.Name })
-	if i < 0 {
-		return Certificate{}, ErrNoCertificate // deleted meanwhile
+	return describeCert(stored)
+}
+
+// storedCert returns the first certificate kept by the Manager for which
+// match is true.
+func (m *Manager) storedCert(ctx context.Context, match func(store.Cert) bool) (store.Cert, error) {
+	stored, err := m.opts.Store.Certs(ctx)
+	if err != nil {
+		return store.Cert{}, err
 	}
-	return describeCert(stored[i])
+	i := slices.IndexFunc(stored, match)
+	if i < 0 {
+		return store.Cert{}, ErrNoCertificate // e.g. deleted meanwhile
+	}
+	return stored[i], nil
 }
 
 // acmeHas reports whether acme.sh has a certificate of the given name, as
@@ -449,14 +471,12 @@ func (m *Manager) DeleteCertificate(ctx context.Context, name string) error {
 // without one.
 func usersOf(sites []store.Site, cert string) []string {
 	var users []string
-	for _, site := range sites {
-		s, err := config.DecodeServer(site.Config)
-		if err != nil || !s.Enabled() || !s.UsesCert(cert) {
-			continue
-		}
-		if names := s.Names(); len(names) > 0 {
-			users = append(users, names[0])
-		} else {
+	for _, ref := range sitesServing(sites, cert) {
+		switch {
+		case !ref.Enabled:
+		case ref.Name != "":
+			users = append(users, ref.Name)
+		default:
 			users = append(users, "raw configuration")
 		}
 	}
@@ -497,6 +517,7 @@ func (m *Manager) IssueCertificate(ctx context.Context, domains []string, dnsAPI
 
 // Authority describes a CA kept by the Manager to sign certificates.
 type Authority struct {
+	ID      string `json:"id"` // like that of a Certificate
 	Name    string `json:"name"`
 	Subject string `json:"subject"`
 	Issuer  string `json:"issuer"` // the subject, if self-signed
@@ -533,6 +554,7 @@ func describeAuthority(ca store.Authority, stored []store.Cert) (Authority, erro
 	}
 	info := certs.Describe(pair)
 	a := Authority{
+		ID:      ca.ID,
 		Name:    ca.Name,
 		Subject: info.Subject,
 		Issuer:  info.Issuer,
@@ -559,7 +581,7 @@ func (m *Manager) AddAuthority(ctx context.Context, req UploadRequest) (Authorit
 	if len(u.problems) > 0 {
 		return Authority{}, u.problems
 	}
-	ca := store.Authority{Name: u.name, CertPEM: u.pair.CertPEM(), KeyPEM: u.pair.KeyPEM()}
+	ca := store.Authority{ID: store.NewID(), Name: u.name, CertPEM: u.pair.CertPEM(), KeyPEM: u.pair.KeyPEM()}
 	err = m.opts.Store.AddAuthority(ctx, ca)
 	if errors.Is(err, store.ErrExists) { // added meanwhile
 		return Authority{}, certs.FieldError("name", certs.NameInUse, u.name)

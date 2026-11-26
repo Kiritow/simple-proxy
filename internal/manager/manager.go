@@ -93,6 +93,7 @@ func New(opts Options) *Manager {
 		m.status.ConfigPath = a.Path
 		m.status.TestCommand = strings.Join(a.Test, " ")
 		m.status.ReloadCommand = strings.Join(a.Reload, " ")
+		m.status.VersionCommand = strings.Join(a.Version, " ")
 	}
 	m.status.ACME = opts.CA != nil
 	m.status.ACMEWebroot = opts.ACMEWebroot
@@ -108,6 +109,12 @@ type Status struct {
 	ConfigPath    string `json:"config_path,omitempty"`
 	TestCommand   string `json:"test_command,omitempty"`
 	ReloadCommand string `json:"reload_command,omitempty"`
+	// Nginx describes nginx, as VersionCommand prints it, once known;
+	// NginxError tells why it is not known otherwise. Both are found out
+	// whenever the stored sites are applied again, e.g. on startup.
+	VersionCommand string       `json:"version_command,omitempty"`
+	Nginx          *apply.Nginx `json:"nginx,omitempty"`
+	NginxError     string       `json:"nginx_error,omitempty"`
 	// AppliedAt is when nginx last loaded the stored sites.
 	AppliedAt *time.Time `json:"applied_at,omitempty"`
 	// Error is set if nginx may not run the stored sites, because applying
@@ -425,8 +432,10 @@ func (m *Manager) pruneCerts(st state) {
 	}
 }
 
-// Apply applies the stored sites again, e.g. after nginx restarted.
+// Apply applies the stored sites again, e.g. after nginx restarted, and
+// finds out nginx's version, which may have changed then.
 func (m *Manager) Apply(ctx context.Context) error {
+	m.describeNginx(ctx)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	st, err := m.load(ctx)
@@ -439,6 +448,24 @@ func (m *Manager) Apply(ctx context.Context) error {
 	}
 	m.applied(err)
 	return err
+}
+
+// describeNginx records the version of nginx in the status.
+func (m *Manager) describeNginx(ctx context.Context) {
+	if m.opts.Applier == nil || len(m.opts.Applier.Version) == 0 {
+		return
+	}
+	n, err := m.opts.Applier.Nginx(ctx)
+	if err != nil {
+		m.opts.Logger.WarnContext(ctx, "finding out nginx's version", "err", err)
+	}
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+	if err != nil {
+		m.status.Nginx, m.status.NginxError = nil, err.Error()
+		return
+	}
+	m.status.Nginx, m.status.NginxError = &n, ""
 }
 
 func (m *Manager) applyLocked(ctx context.Context, st state) error {

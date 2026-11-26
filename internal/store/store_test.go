@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"testing"
 
@@ -178,8 +179,61 @@ func TestMigrationDropsRevisions(t *testing.T) {
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_schema WHERE name = 'revision'").Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
-	if version != 4 || tables != 0 {
-		t.Errorf("schema version %d with %d revision tables, want version 4 without", version, tables)
+	if version != 5 || tables != 0 {
+		t.Errorf("schema version %d with %d revision tables, want version 5 without", version, tables)
+	}
+}
+
+var uuidV4 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+func TestNewID(t *testing.T) {
+	a, b := store.NewID(), store.NewID()
+	if !uuidV4.MatchString(a) || a == b {
+		t.Errorf("NewID = %q, %q; want distinct version 4 UUIDs", a, b)
+	}
+}
+
+// TestMigrationAddsIDs upgrades a database of version 4, whose certificates
+// and CAs have no IDs.
+func TestMigrationAddsIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sites.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE sites (id TEXT PRIMARY KEY, position INTEGER NOT NULL, config TEXT NOT NULL CHECK (json_valid(config)),
+			created_at TEXT NOT NULL, updated_at TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 1) STRICT`,
+		`CREATE TABLE certificates (name TEXT PRIMARY KEY, cert TEXT NOT NULL, key TEXT NOT NULL, ca TEXT NOT NULL,
+			key_type TEXT NOT NULL, days INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT`,
+		`CREATE TABLE authorities (name TEXT PRIMARY KEY, cert TEXT NOT NULL, key TEXT NOT NULL, created_at TEXT NOT NULL) STRICT`,
+		`INSERT INTO certificates VALUES
+			('a', 'cert a', 'key a', '', '', 0, '2026-01-02T03:04:05Z', '2026-01-02T03:04:05Z'),
+			('b', 'cert b', 'key b', 'Root', 'ec', 90, '2026-01-02T03:04:05Z', '2026-02-02T03:04:05Z')`,
+		`INSERT INTO authorities VALUES ('Root', 'cert', 'key', '2026-01-01T00:00:00Z')`,
+		`PRAGMA user_version = 4`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	s := open(t, path)
+	certs, err := s.Certs(t.Context())
+	if err != nil || len(certs) != 2 {
+		t.Fatalf("Certs = %+v, %v", certs, err)
+	}
+	a, b := certs[0], certs[1]
+	if !uuidV4.MatchString(a.ID) || !uuidV4.MatchString(b.ID) || a.ID == b.ID {
+		t.Errorf("IDs %q and %q, want distinct version 4 UUIDs", a.ID, b.ID)
+	}
+	if string(b.KeyPEM) != "key b" || b.CA != "Root" || b.Days != 90 || b.UpdatedAt.Month() != 2 {
+		t.Errorf("certificate b = %+v, want it kept", b)
+	}
+	cas, err := s.Authorities(t.Context())
+	if err != nil || len(cas) != 1 || !uuidV4.MatchString(cas[0].ID) || cas[0].Name != "Root" {
+		t.Errorf("Authorities = %+v, %v", cas, err)
 	}
 }
 
@@ -217,8 +271,8 @@ func TestGenerationsCountChanges(t *testing.T) {
 func TestCerts(t *testing.T) {
 	s := open(t, filepath.Join(t.TempDir(), "sites.db"))
 	ctx := t.Context()
-	a := store.Cert{Name: "a.example.com", CertPEM: []byte("cert a"), KeyPEM: []byte("key a")}
-	b := store.Cert{Name: "b.example.com", CertPEM: []byte("cert b"), KeyPEM: []byte("key b"), CA: "Root", KeyType: "ec", Days: 90}
+	a := store.Cert{ID: store.NewID(), Name: "a.example.com", CertPEM: []byte("cert a"), KeyPEM: []byte("key a")}
+	b := store.Cert{ID: store.NewID(), Name: "b.example.com", CertPEM: []byte("cert b"), KeyPEM: []byte("key b"), CA: "Root", KeyType: "ec", Days: 90}
 	if err := s.ReplaceCerts(ctx, []store.Cert{b, a}); err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +280,7 @@ func TestCerts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].Name != "a.example.com" || got[1].CA != "Root" || got[1].Days != 90 ||
+	if len(got) != 2 || got[0].Name != "a.example.com" || got[0].ID != a.ID || got[1].CA != "Root" || got[1].Days != 90 ||
 		string(got[1].KeyPEM) != "key b" || got[0].CreatedAt.IsZero() {
 		t.Fatalf("Certs = %+v, want a and b by name", got)
 	}
@@ -240,25 +294,77 @@ func TestCerts(t *testing.T) {
 	if len(got) != 1 || string(got[0].CertPEM) != "cert b2" || got[0].CreatedAt.IsZero() {
 		t.Errorf("Certs = %+v, want b replaced", got)
 	}
-	if err := s.ReplaceCerts(ctx, []store.Cert{a, a}); err == nil {
-		t.Error("ReplaceCerts accepted duplicate names")
+	created := got[0].CreatedAt
+
+	// Renaming b to the name of a deleted certificate keeps the rest.
+	b.Name = "a.example.com"
+	if err := s.Replace(ctx, nil, []store.Cert{b}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Certs(ctx)
+	if len(got) != 1 || got[0].ID != b.ID || got[0].Name != "a.example.com" || string(got[0].CertPEM) != "cert b2" || !got[0].CreatedAt.Equal(created) {
+		t.Errorf("Certs = %+v, want b renamed", got)
+	}
+
+	for _, bad := range [][]store.Cert{
+		{a, a},
+		{a, {ID: store.NewID(), Name: a.Name}},
+		{{Name: "no ID"}},
+	} {
+		if err := s.ReplaceCerts(ctx, bad); err == nil {
+			t.Errorf("ReplaceCerts accepted %+v", bad)
+		}
 	}
 }
 
 func TestAuthorities(t *testing.T) {
 	s := open(t, filepath.Join(t.TempDir(), "sites.db"))
 	ctx := t.Context()
-	root := store.Authority{Name: "Home Root CA", CertPEM: []byte("cert"), KeyPEM: []byte("key")}
+	root := store.Authority{ID: store.NewID(), Name: "Home Root CA", CertPEM: []byte("cert"), KeyPEM: []byte("key")}
 	if err := s.AddAuthority(ctx, root); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddAuthority(ctx, root); !errors.Is(err, store.ErrExists) {
+	again := root
+	again.ID = store.NewID()
+	if err := s.AddAuthority(ctx, again); !errors.Is(err, store.ErrExists) {
 		t.Errorf("adding it again: %v, want ErrExists", err)
 	}
 	got, err := s.Authorities(ctx)
-	if err != nil || len(got) != 1 || got[0].Name != root.Name || string(got[0].KeyPEM) != "key" {
+	if err != nil || len(got) != 1 || got[0].Name != root.Name || got[0].ID != root.ID || string(got[0].KeyPEM) != "key" {
 		t.Fatalf("Authorities = %+v, %v", got, err)
 	}
+
+	// Renaming it renames the CA of the certificates it signed.
+	signed := []store.Cert{
+		{ID: store.NewID(), Name: "nas.lan", CertPEM: []byte("c"), KeyPEM: []byte("k"), CA: root.Name},
+		{ID: store.NewID(), Name: "other", CertPEM: []byte("c"), KeyPEM: []byte("k"), CA: "Other CA"},
+	}
+	if err := s.ReplaceCerts(ctx, signed); err != nil {
+		t.Fatal(err)
+	}
+	other := store.Authority{ID: store.NewID(), Name: "Other CA", CertPEM: []byte("cert"), KeyPEM: []byte("key")}
+	if err := s.AddAuthority(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RenameAuthority(ctx, root.Name, other.Name); !errors.Is(err, store.ErrExists) {
+		t.Errorf("renaming it to a taken name: %v, want ErrExists", err)
+	}
+	if err := s.RenameAuthority(ctx, "nope", "Nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("renaming a missing CA: %v, want ErrNotFound", err)
+	}
+	if err := s.RenameAuthority(ctx, root.Name, "Home CA 2026"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Authorities(ctx)
+	if len(got) != 2 || got[0].Name != "Home CA 2026" || got[0].ID != root.ID {
+		t.Errorf("Authorities = %+v, want the CA renamed", got)
+	}
+	certs, _ := s.Certs(ctx)
+	if len(certs) != 2 || certs[0].CA != "Home CA 2026" || certs[1].CA != "Other CA" {
+		t.Errorf("Certs = %+v, want the certificate signed by the CA to follow it", certs)
+	}
+	root.Name = "Home CA 2026"
+
 	if err := s.DeleteAuthority(ctx, root.Name); err != nil {
 		t.Fatal(err)
 	}
