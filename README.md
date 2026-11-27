@@ -27,8 +27,8 @@ forward them to), and saving applies it to nginx right away.
   changes. If another window saves or deletes a site you are editing, you
   are told right away, and can load the saved version or keep your edits
   and overwrite it; saving never overwrites someone else's change unknowingly.
-- **Import/export:** `config.yaml` files of legacy-proxy-generator can be
-  imported, and the sites exported in the same format.
+- **Import/export:** sites can be exported to a `config.yaml` file and
+  imported from one.
 - **Users and roles:** sign in with a username and password, or with an
   OpenID Connect provider. Site operators manage the sites given to them,
   platform operators all sites, and administrators everything, certificates
@@ -350,9 +350,8 @@ simple-proxy -nginx-conf /srv/proxy/conf.d/proxy.conf \
 
 ## Configuration format
 
-Sites use the format of legacy-proxy-generator's `config.yaml`, which the
-console imports and exports. See [config.yaml.example](config.yaml.example);
-JSON is accepted too.
+The console imports and exports sites as a `config.yaml` in this format. See
+[config.yaml.example](config.yaml.example); JSON is accepted too.
 
 ```yaml
 servers:
@@ -524,18 +523,3 @@ a server running on the default address.
 Run `go test ./...` and `npm --prefix web test` for the tests, and
 `go test ./internal/nginx -update` to rewrite the golden files in
 `internal/nginx/testdata` after intended output changes.
-
-## Differences from legacy-proxy-generator
-
-- `listen_port` with HTTPS: the redirect server listens on port 80 and
-  redirects to the custom port. Previously both servers listened on
-  `listen_port`, which nginx rejects.
-- Setting `cert_name` enables HTTPS unless `https: false`, as documented in
-  the legacy example.
-- Server-level `options` are applied; they used to be ignored.
-- Options may be written as strings (`- add_header X "v"`), as the legacy
-  example did, besides the `{key, value}` form.
-- Location `port` may be omitted to use the default location's port.
-- IPv6 upstreams are bracketed in `proxy_pass`.
-- Certificates are referenced where acme.sh keeps them rather than copied
-  (`--copy-cert`); mount them into an nginx container at the same paths.

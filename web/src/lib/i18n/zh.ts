@@ -406,7 +406,7 @@ export const zh: Messages = {
   import: {
     title: "导入配置",
     description:
-      "粘贴 config.yaml（或 JSON），例如 legacy-proxy-generator 使用的配置。导入会替换所有站点，并应用到 nginx。",
+      "粘贴 config.yaml（或 JSON）。导入会替换所有站点，并应用到 nginx。",
     label: "配置",
     failed: "无法导入这个配置",
     openFile: "打开文件",

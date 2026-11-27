@@ -1,6 +1,5 @@
 // Package config defines the YAML schema describing the reverse proxies to
-// generate. The schema is compatible with the configuration files of
-// legacy-proxy-generator; see config.yaml.example in the repository root.
+// generate; see config.yaml.example in the repository root.
 package config
 
 import (
@@ -123,7 +122,7 @@ func (l Location) Enabled() bool { return l.Enable == nil || *l.Enable }
 // Directive is a raw nginx directive, such as `add_header X-Example "value"`.
 //
 // In YAML a directive is written either as a string, or as a mapping with
-// "key" and "value" fields as accepted by legacy-proxy-generator.
+// "key" and "value" fields.
 type Directive struct {
 	Name string
 	Args string

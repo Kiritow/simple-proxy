@@ -434,7 +434,7 @@ export const en = {
   import: {
     title: "Import configuration",
     description:
-      "Paste a config.yaml (or JSON), e.g. one used with legacy-proxy-generator. Importing replaces all sites and applies them to nginx.",
+      "Paste a config.yaml (or JSON). Importing replaces all sites and applies them to nginx.",
     label: "Configuration",
     failed: "The configuration cannot be imported",
     openFile: "Open file",
